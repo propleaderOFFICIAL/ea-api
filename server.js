@@ -133,6 +133,33 @@ app.post('/api/signals', (req, res) => {
             console.log(`🔵 ORDINE ATTIVATO - Ticket: ${ticket} ${pendingOrder.symbol} @ ${price}`);
         }
         
+    } else if (action === "modify") {
+        // Modifica ordine pendente
+        if (pendingOrders.has(ticket)) {
+            const existingOrder = pendingOrders.get(ticket);
+            
+            // Aggiorna con nuovi dati
+            const updatedOrder = {
+                ...existingOrder,
+                lots: lots,
+                price: price,
+                sl: sl,
+                tp: tp,
+                expiration: expiration,
+                account: account,
+                timestamp: new Date(),
+                modified: true
+            };
+            
+            pendingOrders.set(ticket, updatedOrder);
+            
+            if (account) {
+                updateMasterAccountInfo(account);
+            }
+            
+            console.log(`🔄 ORDINE MODIFICATO - Ticket: ${ticket} ${updatedOrder.symbol} @ ${price}`);
+        }
+        
     } else if (action === "close") {
         // Trade chiuso
         if (openTrades.has(ticket)) {
