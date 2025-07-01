@@ -13,6 +13,7 @@ app.use(bodyParser.json());
 let openTrades = new Map();      // ticket -> trade data (trade eseguiti)
 let pendingOrders = new Map();   // ticket -> order data (ordini pendenti)
 let recentCloses = [];           // segnali di chiusura/cancellazione recenti
+let masterAccountInfo = {};      // ultima informazione account Master
 const MASTER_KEY = "master_secret_key_2024";
 
 //+------------------------------------------------------------------+
@@ -24,7 +25,8 @@ app.get('/api/health', (req, res) => {
         time: new Date(),
         openTrades: openTrades.size,
         pendingOrders: pendingOrders.size,
-        recentCloses: recentCloses.length
+        recentCloses: recentCloses.length,
+        masterAccount: masterAccountInfo.number || 'N/A'
     });
 });
 
@@ -34,7 +36,7 @@ app.get('/api/health', (req, res) => {
 app.post('/api/signals', (req, res) => {
     const { 
         masterkey, action, ticket, symbol, type, lots, price, sl, tp, time, comment,
-        closeprice, closetime, expiration, activationprice
+        closeprice, closetime, expiration, activationprice, profit, account
     } = req.body;
     
     // Verifica chiave master
@@ -56,10 +58,17 @@ app.post('/api/signals', (req, res) => {
             tp: tp,
             time: time,
             comment: comment,
+            account: account,     // Informazioni account del Master
             timestamp: new Date()
         };
         
         openTrades.set(ticket, signal);
+        
+        // Aggiorna informazioni account Master (se presenti)
+        if (account) {
+            updateMasterAccountInfo(account);
+        }
+        
         console.log(`🟢 TRADE APERTO - Ticket: ${ticket} ${symbol} @ ${price} (Totali: ${openTrades.size})`);
         
     } else if (action === "pending") {
@@ -76,12 +85,19 @@ app.post('/api/signals', (req, res) => {
             tp: tp,
             time: time,
             comment: comment,
-            expiration: expiration,      // Scadenza ordine (opzionale)
-            activationprice: activationprice,  // Prezzo di attivazione (per stop orders)
+            expiration: expiration,
+            activationprice: activationprice,
+            account: account,     // Informazioni account del Master
             timestamp: new Date()
         };
         
         pendingOrders.set(ticket, signal);
+        
+        // Aggiorna informazioni account Master (se presenti)
+        if (account) {
+            updateMasterAccountInfo(account);
+        }
+        
         console.log(`🟡 ORDINE PENDENTE - Ticket: ${ticket} ${symbol} @ ${price} (Totali: ${pendingOrders.size})`);
         
     } else if (action === "activated") {
@@ -103,11 +119,17 @@ app.post('/api/signals', (req, res) => {
                 tp: pendingOrder.tp,
                 time: time,
                 comment: pendingOrder.comment,
+                account: account,     // Informazioni account aggiornate
                 timestamp: new Date(),
                 wasActivated: true
             };
             
             openTrades.set(ticket, activatedTrade);
+            
+            if (account) {
+                updateMasterAccountInfo(account);
+            }
+            
             console.log(`🔵 ORDINE ATTIVATO - Ticket: ${ticket} ${pendingOrder.symbol} @ ${price}`);
         }
         
@@ -122,11 +144,18 @@ app.post('/api/signals', (req, res) => {
                 ticket: ticket,
                 closeprice: closeprice,
                 closetime: closetime,
+                profit: profit,       // Profit del trade chiuso
+                account: account,     // Stato account aggiornato dopo chiusura
                 timestamp: new Date()
             };
             
             recentCloses.push(closeSignal);
-            console.log(`🔴 TRADE CHIUSO - Ticket: ${ticket} @ ${closeprice}`);
+            
+            if (account) {
+                updateMasterAccountInfo(account);
+            }
+            
+            console.log(`🔴 TRADE CHIUSO - Ticket: ${ticket} @ ${closeprice} Profit: ${profit || 'N/A'}`);
         }
         
     } else if (action === "cancel") {
@@ -139,10 +168,16 @@ app.post('/api/signals', (req, res) => {
                 signalType: "cancel",
                 ticket: ticket,
                 canceltime: time,
+                account: account,     // Stato account aggiornato
                 timestamp: new Date()
             };
             
             recentCloses.push(cancelSignal);
+            
+            if (account) {
+                updateMasterAccountInfo(account);
+            }
+            
             console.log(`❌ ORDINE CANCELLATO - Ticket: ${ticket}`);
         }
     }
@@ -164,7 +199,8 @@ app.get('/api/getsignals', (req, res) => {
     const response = {
         openTrades: [],
         pendingOrders: [],
-        recentActions: []  // Chiusure e cancellazioni
+        recentActions: [],  // Chiusure e cancellazioni
+        masterAccount: masterAccountInfo  // Informazioni account Master
     };
     
     // Invia TUTTI i trade attualmente aperti dal master
@@ -258,6 +294,20 @@ app.post('/api/reset', (req, res) => {
     console.log('🧹 RESET COMPLETO - Tutti i segnali cancellati');
     res.json({ status: 'success', message: 'Complete reset performed' });
 });
+
+//+------------------------------------------------------------------+
+//| Funzione per aggiornare informazioni account Master            |
+//+------------------------------------------------------------------+
+function updateMasterAccountInfo(accountData) {
+    if (accountData && typeof accountData === 'object') {
+        masterAccountInfo = {
+            ...accountData,
+            lastUpdated: new Date()
+        };
+        
+        console.log(`💰 Account Master aggiornato: Balance: ${accountData.balance}, Equity: ${accountData.equity}, Profit: ${accountData.profit}`);
+    }
+}
 
 // Avvia server
 app.listen(PORT, () => {
