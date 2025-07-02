@@ -36,7 +36,7 @@ app.get('/api/health', (req, res) => {
 app.post('/api/signals', (req, res) => {
     const { 
         masterkey, action, ticket, symbol, type, lots, price, sl, tp, time, comment,
-        closeprice, closetime, expiration, activationprice, profit, account
+        closeprice, closetime, expiration, activationprice, profit, account, barsFromPlacement
     } = req.body;
     
     // Verifica chiave master
@@ -87,6 +87,7 @@ app.post('/api/signals', (req, res) => {
             comment: comment,
             expiration: expiration,
             activationprice: activationprice,
+            barsFromPlacement: barsFromPlacement || 0,  // Barre dal piazzamento
             account: account,     // Informazioni account del Master
             timestamp: new Date()
         };
@@ -98,7 +99,7 @@ app.post('/api/signals', (req, res) => {
             updateMasterAccountInfo(account);
         }
         
-        console.log(`🟡 ORDINE PENDENTE - Ticket: ${ticket} ${symbol} @ ${price} (Totali: ${pendingOrders.size})`);
+        console.log(`🟡 ORDINE PENDENTE - Ticket: ${ticket} ${symbol} @ ${price} Barre: ${barsFromPlacement || 0} (Totali: ${pendingOrders.size})`);
         
     } else if (action === "activated") {
         // Ordine pendente che si è attivato -> diventa trade aperto
@@ -146,6 +147,7 @@ app.post('/api/signals', (req, res) => {
                 sl: sl,
                 tp: tp,
                 expiration: expiration,
+                barsFromPlacement: barsFromPlacement || existingOrder.barsFromPlacement,  // Aggiorna barre
                 account: account,
                 timestamp: new Date(),
                 modified: true
@@ -163,6 +165,7 @@ app.post('/api/signals', (req, res) => {
                 sl: sl,
                 tp: tp,
                 expiration: expiration,
+                barsFromPlacement: barsFromPlacement || 0,  // Include barre nella modifica
                 account: account,
                 timestamp: new Date()
             };
@@ -173,7 +176,7 @@ app.post('/api/signals', (req, res) => {
                 updateMasterAccountInfo(account);
             }
             
-            console.log(`🔄 ORDINE MODIFICATO - Ticket: ${ticket} ${updatedOrder.symbol} @ ${price}`);
+            console.log(`🔄 ORDINE MODIFICATO - Ticket: ${ticket} ${updatedOrder.symbol} @ ${price} Barre: ${barsFromPlacement || 0}`);
         }
         
     } else if (action === "close") {
