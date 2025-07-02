@@ -153,6 +153,22 @@ app.post('/api/signals', (req, res) => {
             
             pendingOrders.set(ticket, updatedOrder);
             
+            // Aggiungi anche alle azioni recenti per notificare i client
+            const modifyAction = {
+                action: "modify",
+                signalType: "modify",
+                ticket: ticket,
+                symbol: symbol,
+                price: price,
+                sl: sl,
+                tp: tp,
+                expiration: expiration,
+                account: account,
+                timestamp: new Date()
+            };
+            
+            recentCloses.push(modifyAction);
+            
             if (account) {
                 updateMasterAccountInfo(account);
             }
