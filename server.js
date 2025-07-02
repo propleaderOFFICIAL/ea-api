@@ -192,17 +192,13 @@ app.post('/api/signals', (req, res) => {
 
         
 
-        // Aggiorna informazioni account Master (se presenti)
+        // Modifica questa riga
+    pendingOrders.set(parseInt(ticket), signal); // <<< AGGIUNGI parseInt()
 
-        if (account) {
-
-            updateMasterAccountInfo(account);
-
-        }
-
-        
-
-        console.log(`🟡 ORDINE PENDENTE - Ticket: ${ticket} ${symbol} @ ${price} Barre: ${barsFromPlacement || 0} TF: ${timeframeName || 'Unknown'} (Totali: ${pendingOrders.size})`);
+    if (account) {
+        updateMasterAccountInfo(account);
+    }
+    console.log(`🟡 ORDINE PENDENTE - Ticket: ${ticket} ...`);
 
         
 
@@ -211,30 +207,32 @@ app.post('/api/signals', (req, res) => {
     // Ordine pendente che si è attivato -> diventa trade eseguito
     const { pendingTicket, ticket, price, time, account } = req.body;
 
+     const pTicket = parseInt(pendingTicket); // <<< AGGIUNGI QUESTA RIGA
+
     // Controlliamo se il pendente originale è nella nostra lista
-    if (pendingOrders.has(pendingTicket)) {
+    if (pendingOrders.has(pTicket)) {
         // 1. Prendiamo i dati del pendente e lo rimuoviamo dalla lista dei pendenti attivi
-        const pendingOrder = pendingOrders.get(pendingTicket);
-        pendingOrders.delete(pendingTicket);
+        const pendingOrder = pendingOrders.get(pTicket);
+        pendingOrders.delete(pTicket);
 
         // 2. Registriamo l'evento nella NUOVA lista 'filledOrders'
         //    Questo evento informa gli slave che il loro pendente va cancellato.
         const filledData = {
             signalType: "filled",
-            pendingTicket: pendingTicket, // Ticket del pendente originale
+            pendingTicket: pTicket, // Ticket del pendente originale
             marketTicket: ticket,       // Ticket del nuovo trade a mercato sul Master
             symbol: pendingOrder.symbol,
             fillPrice: price,           // Prezzo di esecuzione reale
             fillTime: time,
             timestamp: new Date()
         };
-        filledOrders.set(pendingTicket, filledData);
+        filledOrders.set(pTicket, filledData);
 
         if (account) {
             updateMasterAccountInfo(account);
         }
 
-        console.log(`🔵 PENDENTE ESEGUITO (FILLED) - Pendente #${pendingTicket} -> Mercato #${ticket} @ ${price}`);
+        console.log(`🔵 PENDENTE ESEGUITO (FILLED) - Pendente #${pTicket} -> Mercato #${ticket} @ ${price}`);
 
     } else {
         console.warn(`⚠️ Ricevuto 'activated' per un pendente non tracciato o già eseguito: #${pendingTicket}`);
@@ -388,12 +386,8 @@ app.post('/api/signals', (req, res) => {
         
 
     } else if (action === "cancel") {
-
-        // Ordine pendente cancellato
-
-        if (pendingOrders.has(ticket)) {
-
-            pendingOrders.delete(ticket);
+    if (pendingOrders.has(parseInt(ticket))) { // <<< AGGIUNGI parseInt()
+        pendingOrders.delete(parseInt(ticket)); // <<< AGGIUNGI parseInt()
 
             
 
