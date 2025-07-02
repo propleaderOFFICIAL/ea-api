@@ -20,17 +20,13 @@ app.use(bodyParser.json());
 
 
 
-// Database in memoria
-
-let openTrades = new Map();      // ticket -> trade data (trade eseguiti)
-
-let pendingOrders = new Map();   // ticket -> order data (ordini pendenti)
-
-let recentCloses = [];           // segnali di chiusura/cancellazione recenti
-
-let masterAccountInfo = {};      // ultima informazione account Master
-
-const MASTER_KEY = "master_secret_key_2024";
+// Database in memoria 
+ let openTrades = new Map();      // ticket -> trade data (trade eseguiti) 
+ let pendingOrders = new Map();   // ticket -> order data (ordini pendenti) 
+ let filledOrders = new Map();    // <<< AGGIUNGI QUESTA RIGA
+ let recentCloses = [];           // segnali di chiusura/cancellazione recenti 
+ let masterAccountInfo = {};      // ultima informazione account Master 
+ const MASTER_KEY = "master_secret_key_2024";
 
 
 
@@ -210,73 +206,40 @@ app.post('/api/signals', (req, res) => {
 
         
 
-    } else if (action === "activated") {
+    } else if (action === "activated") {// Cerca questo blocco nel tuo codice e SOSTITUISCILO completamente
+} else if (action === "activated") {
+    // Ordine pendente che si è attivato -> diventa trade eseguito
+    const { pendingTicket, ticket, price, time, account } = req.body;
 
-        // Ordine pendente che si è attivato -> diventa trade aperto
+    // Controlliamo se il pendente originale è nella nostra lista
+    if (pendingOrders.has(pendingTicket)) {
+        // 1. Prendiamo i dati del pendente e lo rimuoviamo dalla lista dei pendenti attivi
+        const pendingOrder = pendingOrders.get(pendingTicket);
+        pendingOrders.delete(pendingTicket);
 
-        if (pendingOrders.has(ticket)) {
+        // 2. Registriamo l'evento nella NUOVA lista 'filledOrders'
+        //    Questo evento informa gli slave che il loro pendente va cancellato.
+        const filledData = {
+            signalType: "filled",
+            pendingTicket: pendingTicket, // Ticket del pendente originale
+            marketTicket: ticket,       // Ticket del nuovo trade a mercato sul Master
+            symbol: pendingOrder.symbol,
+            fillPrice: price,           // Prezzo di esecuzione reale
+            fillTime: time,
+            timestamp: new Date()
+        };
+        filledOrders.set(pendingTicket, filledData);
 
-            const pendingOrder = pendingOrders.get(ticket);
+        if (account) {
+            updateMasterAccountInfo(account);
+        }
 
-            pendingOrders.delete(ticket);
+        console.log(`🔵 PENDENTE ESEGUITO (FILLED) - Pendente #${pendingTicket} -> Mercato #${ticket} @ ${price}`);
 
-            
-
-            // Crea trade aperto dalla pending
-
-            const activatedTrade = {
-
-                signalType: "trade",
-
-                action: "open",
-
-                ticket: ticket,
-
-                symbol: pendingOrder.symbol,
-
-                type: pendingOrder.type >= 4 ? pendingOrder.type - 4 : pendingOrder.type - 2, // Converte pending type a market type
-
-                lots: pendingOrder.lots,
-
-                price: price,         // Prezzo di attivazione effettivo
-
-                sl: pendingOrder.sl,
-
-                tp: pendingOrder.tp,
-
-                time: time,
-
-                comment: pendingOrder.comment,
-
-                account: account,     // Informazioni account aggiornate
-
-                timestamp: new Date(),
-
-                wasActivated: true
-
-            };
-
-            
-
-            openTrades.set(ticket, activatedTrade);
-
-            
-
-            if (account) {
-
-                updateMasterAccountInfo(account);
-
-            }
-
-            
-
-            console.log(`🔵 ORDINE ATTIVATO - Ticket: ${ticket} ${pendingOrder.symbol} @ ${price}`);
-
-        }
-
-        
-
-    } else if (action === "modify") {
+    } else {
+        console.warn(`⚠️ Ricevuto 'activated' per un pendente non tracciato o già eseguito: #${pendingTicket}`);
+    }
+} else if (action === "modify") {
 
         // Modifica ordine pendente
 
@@ -489,85 +452,59 @@ app.post('/api/signals', (req, res) => {
 
 
 //+------------------------------------------------------------------+
-
-//| ENDPOINT 3: Client richiede segnali                             |
-
+//| ENDPOINT 3: Client richiede segnali (MODIFICATO)                 |
 //+------------------------------------------------------------------+
-
 app.get('/api/getsignals', (req, res) => {
+    const { lastsync } = req.query; // Timestamp ultima sincronizzazione client
+    
+    const response = {
+        openTrades: [],
+        pendingOrders: [],
+        filledOrders: [],   // <<< AGGIUNTO: Array per i pendenti eseguiti
+        recentActions: [],
+        masterAccount: masterAccountInfo
+    };
+    
+    // Invia TUTTI i trade attualmente aperti dal master
+    openTrades.forEach((signal, ticket) => {
+        response.openTrades.push(signal);
+    });
+    
+    // Invia TUTTI gli ordini pendenti attivi dal master
+    pendingOrders.forEach((signal, ticket) => {
+        response.pendingOrders.push(signal);
+    });
 
-    const { lastsync } = req.query; // Timestamp ultima sincronizzazione client
-
-    
-
-    const response = {
-
-        openTrades: [],
-
-        pendingOrders: [],
-
-        recentActions: [],  // Chiusure e cancellazioni
-
-        masterAccount: masterAccountInfo  // Informazioni account Master
-
-    };
-
-    
-
-    // Invia TUTTI i trade attualmente aperti dal master
-
-    openTrades.forEach((signal, ticket) => {
-
-        response.openTrades.push(signal);
-
-    });
-
-    
-
-    // Invia TUTTI gli ordini pendenti attivi dal master
-
-    pendingOrders.forEach((signal, ticket) => {
-
-        response.pendingOrders.push(signal);
-
-    });
-
-    
-
-    // Invia azioni recenti (chiusure/cancellazioni)
-
-    if (lastsync) {
-
-        const syncTime = new Date(parseInt(lastsync));
-
-        response.recentActions = recentCloses.filter(action => 
-
-            action.timestamp > syncTime
-
-        );
-
-    } else {
-
-        // Prima sincronizzazione - invia tutte le azioni recenti
-
-        response.recentActions = recentCloses;
-
-    }
-
-    
-
-    console.log(`📤 Segnali inviati: ${response.openTrades.length} trade aperti, ${response.pendingOrders.length} ordini pendenti, ${response.recentActions.length} azioni recenti`);
-
-    
-
-    res.json({
-
-        ...response,
-
-        serverTime: new Date().getTime() // Per prossima sincronizzazione
-
-    });
-
+    // <<< INIZIO BLOCCO AGGIUNTO >>>
+    // Invia tutti gli ordini fillati registrati dall'ultima richiesta
+    filledOrders.forEach((signal, ticket) => {
+        response.filledOrders.push(signal);
+    });
+    // <<< FINE BLOCCO AGGIUNTO >>>
+    
+    // Invia azioni recenti (chiusure/cancellazioni)
+    if (lastsync) {
+        const syncTime = new Date(parseInt(lastsync));
+        response.recentActions = recentCloses.filter(action => 
+            action.timestamp > syncTime
+        );
+    } else {
+        // Prima sincronizzazione - invia tutte le azioni recenti
+        response.recentActions = recentCloses;
+    }
+    
+    console.log(`📤 Segnali inviati: ${response.openTrades.length} aperti, ${response.pendingOrders.length} pendenti, ${response.filledOrders.length} fillati, ${response.recentActions.length} azioni`);
+    
+    // <<< AGGIUNTO: Pulisci la mappa dei fillati dopo averli inviati
+    // Questo previene che gli slave ricevano la stessa notifica più volte
+    if (filledOrders.size > 0) {
+        filledOrders.clear();
+    }
+    
+    res.json({
+        ...response,
+        serverTime: new Date().getTime() // Per prossima sincronizzazione
+    });
 });
 
 
