@@ -202,42 +202,38 @@ app.post('/api/signals', (req, res) => {
 
         
 
-    } else if (action === "activated") {// Cerca questo blocco nel tuo codice e SOSTITUISCILO completamente
-} else if (action === "activated") {
+    } else if (action === "activated") {
     // Ordine pendente che si è attivato -> diventa trade eseguito
     const { pendingTicket, ticket, price, time, account } = req.body;
 
-     const pTicket = parseInt(pendingTicket); // <<< AGGIUNGI QUESTA RIGA
+    const pTicket = parseInt(pendingTicket);
 
-    // Controlliamo se il pendente originale è nella nostra lista
     if (pendingOrders.has(pTicket)) {
-        // 1. Prendiamo i dati del pendente e lo rimuoviamo dalla lista dei pendenti attivi
+        // 1. Rimuoviamo il pendente dalla lista attiva
         const pendingOrder = pendingOrders.get(pTicket);
         pendingOrders.delete(pTicket);
 
-        // 2. Registriamo l'evento nella NUOVA lista 'filledOrders'
-        //    Questo evento informa gli slave che il loro pendente va cancellato.
+        // 2. Registriamo SOLO l'evento di fill per gli slave
         const filledData = {
             signalType: "filled",
-            pendingTicket: pTicket, // Ticket del pendente originale
-            marketTicket: ticket,       // Ticket del nuovo trade a mercato sul Master
+            pendingTicket: pTicket,
+            marketTicket: ticket,
             symbol: pendingOrder.symbol,
-            fillPrice: price,           // Prezzo di esecuzione reale
+            fillPrice: price,
             fillTime: time,
             timestamp: new Date()
         };
         filledOrders.set(pTicket, filledData);
 
+        // 3. NON aggiungiamo agli openTrades - il Master gestisce il trade autonomamente
+        // Quando il Master chiuderà questo trade, invierà un normale segnale "close"
+
         if (account) {
             updateMasterAccountInfo(account);
         }
 
-        console.log(`🔵 PENDENTE ESEGUITO (FILLED) - Pendente #${pTicket} -> Mercato #${ticket} @ ${price}`);
-
-    } else {
-        console.warn(`⚠️ Ricevuto 'activated' per un pendente non tracciato o già eseguito: #${pendingTicket}`);
-    }
-} else if (action === "modify") {
+        console.log(`🔵 PENDENTE ESEGUITO - #${pTicket} -> #${ticket} @ ${price} (trade non tracciato negli openTrades)`);
+    } else if (action === "modify") {
 
         // Modifica ordine pendente
 
