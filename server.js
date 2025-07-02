@@ -36,7 +36,8 @@ app.get('/api/health', (req, res) => {
 app.post('/api/signals', (req, res) => {
     const { 
         masterkey, action, ticket, symbol, type, lots, price, sl, tp, time, comment,
-        closeprice, closetime, expiration, activationprice, profit, account, barsFromPlacement
+        closeprice, closetime, expiration, activationprice, profit, account, 
+        barsFromPlacement, timeframe, timeframeName
     } = req.body;
     
     // Verifica chiave master
@@ -88,6 +89,8 @@ app.post('/api/signals', (req, res) => {
             expiration: expiration,
             activationprice: activationprice,
             barsFromPlacement: barsFromPlacement || 0,  // Barre dal piazzamento
+            timeframe: timeframe || 0,                  // Timeframe Master (es: 15 per M15)
+            timeframeName: timeframeName || "Unknown",  // Nome timeframe (es: "M15")
             account: account,     // Informazioni account del Master
             timestamp: new Date()
         };
@@ -99,7 +102,7 @@ app.post('/api/signals', (req, res) => {
             updateMasterAccountInfo(account);
         }
         
-        console.log(`🟡 ORDINE PENDENTE - Ticket: ${ticket} ${symbol} @ ${price} Barre: ${barsFromPlacement || 0} (Totali: ${pendingOrders.size})`);
+        console.log(`🟡 ORDINE PENDENTE - Ticket: ${ticket} ${symbol} @ ${price} Barre: ${barsFromPlacement || 0} TF: ${timeframeName || 'Unknown'} (Totali: ${pendingOrders.size})`);
         
     } else if (action === "activated") {
         // Ordine pendente che si è attivato -> diventa trade aperto
@@ -148,6 +151,8 @@ app.post('/api/signals', (req, res) => {
                 tp: tp,
                 expiration: expiration,
                 barsFromPlacement: barsFromPlacement || existingOrder.barsFromPlacement,  // Aggiorna barre
+                timeframe: timeframe || existingOrder.timeframe,                          // Aggiorna timeframe
+                timeframeName: timeframeName || existingOrder.timeframeName,              // Aggiorna nome timeframe
                 account: account,
                 timestamp: new Date(),
                 modified: true
@@ -166,6 +171,8 @@ app.post('/api/signals', (req, res) => {
                 tp: tp,
                 expiration: expiration,
                 barsFromPlacement: barsFromPlacement || 0,  // Include barre nella modifica
+                timeframe: timeframe || 0,                  // Include timeframe nella modifica
+                timeframeName: timeframeName || "Unknown",  // Include nome timeframe nella modifica
                 account: account,
                 timestamp: new Date()
             };
@@ -176,7 +183,7 @@ app.post('/api/signals', (req, res) => {
                 updateMasterAccountInfo(account);
             }
             
-            console.log(`🔄 ORDINE MODIFICATO - Ticket: ${ticket} ${updatedOrder.symbol} @ ${price} Barre: ${barsFromPlacement || 0}`);
+            console.log(`🔄 ORDINE MODIFICATO - Ticket: ${ticket} ${updatedOrder.symbol} @ ${price} Barre: ${barsFromPlacement || 0} TF: ${timeframeName || 'Unknown'}`);
         }
         
     } else if (action === "close") {
@@ -301,9 +308,14 @@ app.get('/api/stats', (req, res) => {
     // Conta ordini pendenti
     pendingOrdersArray.forEach(order => {
         if (!symbolStats[order.symbol]) {
-            symbolStats[order.symbol] = { openTrades: 0, pendingOrders: 0, buy: 0, sell: 0 };
+            symbolStats[order.symbol] = { openTrades: 0, pendingOrders: 0, buy: 0, sell: 0, timeframes: [] };
         }
         symbolStats[order.symbol].pendingOrders++;
+        
+        // Aggiungi statistiche timeframe
+        if (order.timeframeName && !symbolStats[order.symbol].timeframes.includes(order.timeframeName)) {
+            symbolStats[order.symbol].timeframes.push(order.timeframeName);
+        }
     });
     
     res.json({
@@ -357,7 +369,7 @@ function updateMasterAccountInfo(accountData) {
 
 // Avvia server
 app.listen(PORT, () => {
-    console.log(`🚀 EA Copy Trading API (Trade + Pending) avviata sulla porta ${PORT}`);
+    console.log(`🚀 EA Copy Trading API (Trade + Pending + Timeframe) avviata sulla porta ${PORT}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
     console.log(`📊 Statistiche: http://localhost:${PORT}/api/stats`);
     console.log(`📈 Segnali: http://localhost:${PORT}/api/getsignals`);
