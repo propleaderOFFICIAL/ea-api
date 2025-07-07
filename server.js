@@ -137,7 +137,30 @@ app.post('/api/signals', (req, res) => {
       console.warn(`⚠️ Tentativo di modificare pendente non esistente: #${ticket}`);
     }
 
-  } else if (action === 'filled') {
+  }} else if (action === 'silentBarsUpdate') {
+  // NUOVO: Aggiornamento silenzioso delle barre per nuovi Slave
+  if (pendingOrders.has(ticketNum)) {
+    const existing = pendingOrders.get(ticketNum);
+    const updated = {
+      ...existing,
+      barsFromPlacement: barsFromPlacement,
+      timeframe: timeframe || existing.timeframe,
+      timeframeName: timeframeName || existing.timeframeName,
+      lastBarsUpdate: timestamp
+    };
+    
+    pendingOrders.set(ticketNum, updated);
+    
+    // NON aggiungere agli eventi recenti per non disturbare gli Slave già connessi
+    console.log(`📊 BARRE AGGIORNATE SILENZIOSAMENTE - Ticket: #${ticket} -> ${barsFromPlacement} barre`);
+    
+  } else {
+    console.warn(`⚠️ Tentativo di aggiornare barre per pendente non esistente: #${ticket}`);
+  }
+
+  if (account) updateMasterAccountInfo(account);
+
+} else if (action === 'filled') {
     // Pendente eseguito nel Master
     if (pendingOrders.has(ticketNum)) {
       const originalPending = pendingOrders.get(ticketNum);
