@@ -18,7 +18,7 @@ let connectedSlaves = new Map();     // slaveKey -> ultimo accesso
 
 // Chiavi di sicurezza
 const MASTER_KEY = "master_secret_key_2024";
-const SLAVE_KEY = "slave_access_key_2024_secure";
+const SLAVE_KEY = "slave_access_key_2025_secure";
 
 // Middleware per autenticazione Slave
 function authenticateSlave(req, res, next) {
