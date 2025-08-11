@@ -16,6 +16,11 @@ let recentEvents = [];               // eventi recenti (cancel, modify, trade_cl
 let masterAccountInfo = {};          // ultima informazione account Master
 let connectedSlaves = new Map();     // slaveKey -> ultimo accesso
 
+// NUOVE VARIABILI PER CONTATORI PERMANENTI
+let totalPendingCreated = 0;   // Contatore totale pendenti mai creati
+let totalFilledCreated = 0;    // Contatore totale fillati mai creati
+let serverStartTime = Date.now(); // Timestamp avvio server
+
 // Chiavi di sicurezza
 const MASTER_KEY = "master_secret_key_2024";
 const SLAVE_KEY = "slave_access_key_2025_secure_new";
@@ -53,6 +58,15 @@ function updateMasterAccountInfo(accountData) {
   }
 }
 
+// NUOVE FUNZIONI HELPER
+function getTotalPendingCreated() {
+  return totalPendingCreated;
+}
+
+function getTotalFilledCreated() {
+  return totalFilledCreated;
+}
+
 //+------------------------------------------------------------------+
 //| ENDPOINT 1: Health Check                                        |
 //+------------------------------------------------------------------+
@@ -64,7 +78,13 @@ app.get('/api/health', (req, res) => {
     filledTrades: filledTrades.size,
     recentEvents: recentEvents.length,
     connectedSlaves: connectedSlaves.size,
-    masterAccount: masterAccountInfo.number || 'N/A'
+    masterAccount: masterAccountInfo.number || 'N/A',
+    // NUOVO: Informazioni sui contatori permanenti
+    serverStartTime: serverStartTime,
+    totalCounters: {
+      pendingCreated: totalPendingCreated,
+      filledCreated: totalFilledCreated
+    }
   });
 });
 
@@ -112,9 +132,11 @@ app.post('/api/signals', (req, res) => {
     };
     
     pendingOrders.set(ticketNum, pendingOrder);
+    totalPendingCreated++; // NUOVO: Incrementa contatore permanente
+    
     if (account) updateMasterAccountInfo(account);
     
-    console.log(`🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Pendenti: ${pendingOrders.size})`);
+    console.log(`🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Pendenti: ${pendingOrders.size}, Totale creati: ${totalPendingCreated})`);
 
   } else if (action === 'modify') {
     // Modifica ordine pendente - SOLO se non è fillato
@@ -214,6 +236,7 @@ app.post('/api/signals', (req, res) => {
       };
       
       filledTrades.set(ticketNum, filledTrade);
+      totalFilledCreated++; // NUOVO: Incrementa contatore permanente
       
       // Rimuovi eventi obsoleti per questo ticket
       const eventsBefore = recentEvents.length;
@@ -223,7 +246,7 @@ app.post('/api/signals', (req, res) => {
       const eventsAfter = recentEvents.length;
       const removedEvents = eventsBefore - eventsAfter;
       
-      console.log(`🔵 PENDENTE FILLATO NEL MASTER - Ticket: #${ticket} ${originalPending.symbol}`);
+      console.log(`🔵 PENDENTE FILLATO NEL MASTER - Ticket: #${ticket} ${originalPending.symbol} (Totale fillati: ${totalFilledCreated})`);
       console.log(`📊 Pendenti: ${pendingOrders.size}, Fillati: ${filledTrades.size}`);
       if (removedEvents > 0) {
         console.log(`🧹 Rimossi ${removedEvents} eventi obsoleti per ticket #${ticket}`);
@@ -307,7 +330,7 @@ app.post('/api/signals', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 3: Client get signals (CON AUTENTICAZIONE SLAVE)       |
+//| ENDPOINT 3: Client get signals (MODIFICATO CON NUOVI CAMPI)     |
 //+------------------------------------------------------------------+
 app.get('/api/getsignals', authenticateSlave, (req, res) => {
   const { lastsync } = req.query;
@@ -317,12 +340,27 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
     filledTrades: [],
     recentEvents: [],
     masterAccount: masterAccountInfo,
-    serverTime: Date.now()
+    serverTime: Date.now(),
+    serverStatus: 'active',  // NUOVO: Indica che il server è attivo
+    // NUOVO: Flag che indica se il server ha mai avuto dati
+    serverHasBeenActive: (pendingOrders.size > 0 || filledTrades.size > 0 || recentEvents.length > 0 || totalPendingCreated > 0 || totalFilledCreated > 0),
+    // NUOVO: Contatori per debug nel bot
+    counters: {
+      totalPendingEver: getTotalPendingCreated(),
+      totalFilledEver: getTotalFilledCreated(),
+      currentPending: pendingOrders.size,
+      currentFilled: filledTrades.size,
+      recentEventsCount: recentEvents.length
+    }
   };
 
-  // Converti Maps in Arrays
+  // Converti Maps in Arrays - SOLO TRADE ATTIVI
   pendingOrders.forEach(order => response.pendingOrders.push(order));
-  filledTrades.forEach(trade => response.filledTrades.push(trade));
+  
+  // Invia solo trade fillati non ancora confermati dallo slave
+  filledTrades.forEach(trade => {
+    response.filledTrades.push(trade);
+  });
 
   // Filtra eventi recenti se lastsync è specificato
   if (lastsync) {
@@ -332,7 +370,7 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
     response.recentEvents = recentEvents;
   }
 
-  console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}`);
+  console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}, hasBeenActive=${response.serverHasBeenActive}`);
 
   res.json(response);
 });
@@ -402,12 +440,18 @@ app.get('/api/stats', (req, res) => {
       lastAccess: data.lastAccess,
       ip: data.ip
     })),
-    serverUptime: process.uptime()
+    serverUptime: process.uptime(),
+    // NUOVO: Contatori totali
+    totalCounters: {
+      pendingCreated: totalPendingCreated,
+      filledCreated: totalFilledCreated,
+      serverStartTime: new Date(serverStartTime)
+    }
   });
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 6: Reset completo                                      |
+//| ENDPOINT 6: Reset completo (MODIFICATO)                         |
 //+------------------------------------------------------------------+
 app.post('/api/reset', (req, res) => {
   if (req.body.masterkey !== MASTER_KEY) {
@@ -419,9 +463,18 @@ app.post('/api/reset', (req, res) => {
   recentEvents = [];
   masterAccountInfo = {};
   connectedSlaves.clear();
+  
+  // NUOVO: Reset anche i contatori permanenti
+  totalPendingCreated = 0;
+  totalFilledCreated = 0;
+  serverStartTime = Date.now();
 
-  console.log('🧹 RESET COMPLETO - Tutti i dati cancellati');
-  res.json({ status: 'success', message: 'Complete reset performed' });
+  console.log('🧹 RESET COMPLETO - Tutti i dati e contatori cancellati');
+  res.json({ 
+    status: 'success', 
+    message: 'Complete reset performed',
+    serverStartTime: serverStartTime
+  });
 });
 
 //+------------------------------------------------------------------+
@@ -433,7 +486,14 @@ app.get('/api/debug', (req, res) => {
     filledTrades: Object.fromEntries(filledTrades),
     recentEvents,
     masterAccount: masterAccountInfo,
-    connectedSlaves: Object.fromEntries(connectedSlaves)
+    connectedSlaves: Object.fromEntries(connectedSlaves),
+    // NUOVO: Debug contatori
+    counters: {
+      totalPendingCreated,
+      totalFilledCreated,
+      serverStartTime: new Date(serverStartTime),
+      serverUptimeSeconds: Math.floor((Date.now() - serverStartTime) / 1000)
+    }
   });
 });
 
@@ -457,9 +517,43 @@ app.post('/api/verify-slave', (req, res) => {
   }
 });
 
+//+------------------------------------------------------------------+
+//| ENDPOINT 9: NUOVO - Verifica stato reset server                 |
+//+------------------------------------------------------------------+
+app.get('/api/server-status', authenticateSlave, (req, res) => {
+  const hasAnyData = (
+    pendingOrders.size > 0 || 
+    filledTrades.size > 0 || 
+    recentEvents.length > 0 ||
+    totalPendingCreated > 0 ||
+    totalFilledCreated > 0
+  );
+  
+  const uptimeHours = process.uptime() / 3600;
+  
+  res.json({
+    status: 'active',
+    serverTime: Date.now(),
+    serverStartTime: serverStartTime,
+    uptimeHours: uptimeHours.toFixed(2),
+    hasEverHadData: hasAnyData,
+    currentData: {
+      pendingOrders: pendingOrders.size,
+      filledTrades: filledTrades.size,
+      recentEvents: recentEvents.length
+    },
+    totalCounters: {
+      pendingCreated: totalPendingCreated,
+      filledCreated: totalFilledCreated
+    },
+    // Questo è il flag chiave per il bot
+    isReset: !hasAnyData && uptimeHours < 0.1  // Reset solo se vuoto E appena riavviato
+  });
+});
+
 // Avvia server
 app.listen(PORT, () => {
-  console.log(`🚀 EA Advanced Pending API v7.0 avviata su port ${PORT}`);
+  console.log(`🚀 EA Advanced Pending API v8.0 avviata su port ${PORT}`);
   console.log(`📋 Endpoints disponibili:`);
   console.log(`   GET  /api/health           - Health check`);
   console.log(`   POST /api/signals          - Ricevi segnali dal Master`);
@@ -469,10 +563,16 @@ app.listen(PORT, () => {
   console.log(`   POST /api/reset            - Reset completo`);
   console.log(`   GET  /api/debug            - Debug stato interno`);
   console.log(`   POST /api/verify-slave     - Verifica chiave slave`);
+  console.log(`   GET  /api/server-status    - NUOVO: Stato reset server (AUTH)`);
   console.log(`🔐 SICUREZZA ATTIVA:`);
   console.log(`   Master Key: ${MASTER_KEY}`);
   console.log(`   Slave Key:  ${SLAVE_KEY}`);
-  console.log(`💡 LOGICA COMPLETA: Pendenti + Trade Fillati + Chiusure Trade + Autenticazione Slave`);
+  console.log(`🆕 NUOVE FUNZIONALITÀ v8.0:`);
+  console.log(`   ✅ Contatori permanenti anti-reset`);
+  console.log(`   ✅ Flag serverHasBeenActive`);
+  console.log(`   ✅ Endpoint /server-status per diagnosi avanzata`);
+  console.log(`   ✅ Debug contatori nei logs`);
+  console.log(`💡 LOGICA COMPLETA: Pendenti + Trade Fillati + Chiusure Trade + Anti-Reset + Autenticazione Slave`);
 });
 
 // Pulizia automatica eventi vecchi ogni 6 ore
