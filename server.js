@@ -16,6 +16,10 @@ let recentEvents = [];               // eventi recenti (cancel, modify, trade_cl
 let masterAccountInfo = {};          // ultima informazione account Master
 let connectedSlaves = new Map();     // slaveKey -> ultimo accesso
 
+// NUOVO: Flag di reset
+let isReset = false;                 // Flag che indica se il Master ha fatto reset
+let resetTimestamp = null;           // Timestamp dell'ultimo reset
+
 // Chiavi di sicurezza
 const MASTER_KEY = "master_secret_key_2024";
 const SLAVE_KEY = "slave_access_key_2025_08";
@@ -53,15 +57,63 @@ function updateMasterAccountInfo(accountData) {
   }
 }
 
+// NUOVA FUNZIONE: Conta tutti i trades nel server
+function getTradeCount() {
+  return {
+    pendingOrders: pendingOrders.size,
+    filledTrades: filledTrades.size,
+    totalTrades: pendingOrders.size + filledTrades.size
+  };
+}
+
+// NUOVA FUNZIONE: Gestisce il flag di reset
+function setResetFlag(value, reason = '') {
+  const wasReset = isReset;
+  isReset = value;
+  
+  if (value) {
+    resetTimestamp = new Date();
+    console.log(`🚨 RESET FLAG ATTIVATO: ${reason}`);
+  } else {
+    if (wasReset) {
+      console.log(`✅ RESET FLAG DISATTIVATO: ${reason}`);
+    }
+  }
+}
+
+//+------------------------------------------------------------------+
+//| ENDPOINT: Contatore Trades con Flag Reset                      |
+//+------------------------------------------------------------------+
+app.get('/api/tradecount', authenticateSlave, (req, res) => {
+  const count = getTradeCount();
+  
+  console.log(`📊 CONTATORE RICHIESTO: Pendenti=${count.pendingOrders}, Fillati=${count.filledTrades}, Totali=${count.totalTrades}, Reset=${isReset}`);
+  
+  res.json({
+    pendingOrders: count.pendingOrders,
+    filledTrades: count.filledTrades,
+    totalTrades: count.totalTrades,
+    isReset: isReset,
+    resetTimestamp: resetTimestamp,
+    serverTime: Date.now(),
+    status: 'success'
+  });
+});
+
 //+------------------------------------------------------------------+
 //| ENDPOINT 1: Health Check                                        |
 //+------------------------------------------------------------------+
 app.get('/api/health', (req, res) => {
+  const count = getTradeCount();
+  
   res.json({
     status: 'online',
     time: new Date(),
-    pendingOrders: pendingOrders.size,
-    filledTrades: filledTrades.size,
+    pendingOrders: count.pendingOrders,
+    filledTrades: count.filledTrades,
+    totalTrades: count.totalTrades,
+    isReset: isReset,
+    resetTimestamp: resetTimestamp,
     recentEvents: recentEvents.length,
     connectedSlaves: connectedSlaves.size,
     masterAccount: masterAccountInfo.number || 'N/A'
@@ -84,6 +136,13 @@ app.post('/api/signals', (req, res) => {
 
   const timestamp = new Date();
   const ticketNum = parseInt(ticket);
+
+  // IMPORTANTE: Quando il Master invia qualsiasi segnale di trading, disattiva il reset
+  if (action === 'pending' || action === 'modify' || action === 'filled') {
+    if (isReset) {
+      setResetFlag(false, `Master ha inviato ${action} per ticket #${ticket}`);
+    }
+  }
 
   if (action === 'pending') {
     // Nuovo ordine pendente - SOLO se non è già stato fillato
@@ -114,7 +173,8 @@ app.post('/api/signals', (req, res) => {
     pendingOrders.set(ticketNum, pendingOrder);
     if (account) updateMasterAccountInfo(account);
     
-    console.log(`🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Pendenti: ${pendingOrders.size})`);
+    const count = getTradeCount();
+    console.log(`🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Totali: ${count.totalTrades}, Reset: ${isReset})`);
 
   } else if (action === 'modify') {
     // Modifica ordine pendente - SOLO se non è fillato
@@ -223,8 +283,9 @@ app.post('/api/signals', (req, res) => {
       const eventsAfter = recentEvents.length;
       const removedEvents = eventsBefore - eventsAfter;
       
+      const count = getTradeCount();
       console.log(`🔵 PENDENTE FILLATO NEL MASTER - Ticket: #${ticket} ${originalPending.symbol}`);
-      console.log(`📊 Pendenti: ${pendingOrders.size}, Fillati: ${filledTrades.size}`);
+      console.log(`📊 STATO SERVER: Pendenti: ${count.pendingOrders}, Fillati: ${count.filledTrades}, Totali: ${count.totalTrades}, Reset: ${isReset}`);
       if (removedEvents > 0) {
         console.log(`🧹 Rimossi ${removedEvents} eventi obsoleti per ticket #${ticket}`);
       }
@@ -236,7 +297,7 @@ app.post('/api/signals', (req, res) => {
     if (account) updateMasterAccountInfo(account);
 
   } else if (action === 'trade_closed') {
-    // NUOVO: Trade chiuso nel Master
+    // Trade chiuso nel Master
     const closedTrade = {
       signalType: 'trade_closed',
       ticket: ticketNum,
@@ -254,11 +315,21 @@ app.post('/api/signals', (req, res) => {
       timestamp
     };
     
+    // Rimuovi il trade dai fillati se presente
+    if (filledTrades.has(ticketNum)) {
+      filledTrades.delete(ticketNum);
+      console.log(`🔴 TRADE FILLATO CHIUSO E RIMOSSO - Ticket: #${ticket} ${symbol} Profit: ${profit}`);
+    } else {
+      console.log(`🔴 TRADE CHIUSO - Ticket: #${ticket} ${symbol} Profit: ${profit}`);
+    }
+    
     // Aggiungi agli eventi recenti
     recentEvents.push(closedTrade);
     
     if (account) updateMasterAccountInfo(account);
-    console.log(`🔴 TRADE CHIUSO - Ticket: #${ticket} ${symbol} Profit: ${profit}`);
+    
+    const count = getTradeCount();
+    console.log(`📊 STATO DOPO CHIUSURA: Pendenti: ${count.pendingOrders}, Fillati: ${count.filledTrades}, Totali: ${count.totalTrades}, Reset: ${isReset}`);
 
   } else if (action === 'cancel') {
     // Ordine pendente cancellato manualmente dal Master
@@ -285,7 +356,9 @@ app.post('/api/signals', (req, res) => {
       });
       
       if (account) updateMasterAccountInfo(account);
-      console.log(`❌ PENDENTE CANCELLATO - Ticket: #${ticket} (Pendenti: ${pendingOrders.size})`);
+      
+      const count = getTradeCount();
+      console.log(`❌ PENDENTE CANCELLATO - Ticket: #${ticket} (Totali: ${count.totalTrades}, Reset: ${isReset})`);
       if (removedEvents > 0) {
         console.log(`🧹 Rimossi ${removedEvents} eventi obsoleti per ticket #${ticket}`);
       }
@@ -307,17 +380,29 @@ app.post('/api/signals', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 3: Client get signals (CON AUTENTICAZIONE SLAVE)       |
+//| ENDPOINT 3: Client get signals (CON FLAG RESET)                 |
 //+------------------------------------------------------------------+
 app.get('/api/getsignals', authenticateSlave, (req, res) => {
   const { lastsync } = req.query;
+  const count = getTradeCount();
   
   const response = {
     pendingOrders: [],
     filledTrades: [],
     recentEvents: [],
     masterAccount: masterAccountInfo,
-    serverTime: Date.now()
+    serverTime: Date.now(),
+    // CONTATORE TRADES
+    tradeCount: {
+      pendingOrders: count.pendingOrders,
+      filledTrades: count.filledTrades,
+      totalTrades: count.totalTrades
+    },
+    // NUOVO: Flag di reset
+    resetInfo: {
+      isReset: isReset,
+      resetTimestamp: resetTimestamp
+    }
   };
 
   // Converti Maps in Arrays
@@ -332,7 +417,7 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
     response.recentEvents = recentEvents;
   }
 
-  console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}`);
+  console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}, totalTrades=${count.totalTrades}, isReset=${isReset}`);
 
   res.json(response);
 });
@@ -347,7 +432,8 @@ app.post('/api/slave-filled', authenticateSlave, (req, res) => {
   if (filledTrades.has(ticketNum)) {
     // Rimuovi il trade fillato quando lo slave conferma l'esecuzione
     filledTrades.delete(ticketNum);
-    console.log(`✅ SLAVE CONFERMA ESECUZIONE: Ticket #${ticket} rimosso dai fillati (rimasti: ${filledTrades.size})`);
+    const count = getTradeCount();
+    console.log(`✅ SLAVE CONFERMA ESECUZIONE: Ticket #${ticket} rimosso dai fillati (Totali nel server: ${count.totalTrades})`);
     res.json({ status: 'confirmed' });
   } else {
     console.warn(`⚠️ Slave conferma esecuzione per ticket non fillato: #${ticket}`);
@@ -359,6 +445,7 @@ app.post('/api/slave-filled', authenticateSlave, (req, res) => {
 //| ENDPOINT 5: Statistiche dettagliate                             |
 //+------------------------------------------------------------------+
 app.get('/api/stats', (req, res) => {
+  const count = getTradeCount();
   const stats = {};
   
   // Analisi per simbolo
@@ -389,8 +476,11 @@ app.get('/api/stats', (req, res) => {
 
   res.json({
     summary: {
-      pendingOrders: pendingOrders.size,
-      filledTrades: filledTrades.size,
+      pendingOrders: count.pendingOrders,
+      filledTrades: count.filledTrades,
+      totalTrades: count.totalTrades,
+      isReset: isReset,
+      resetTimestamp: resetTimestamp,
       recentEvents: recentEvents.length,
       connectedSlaves: connectedSlaves.size
     },
@@ -407,12 +497,15 @@ app.get('/api/stats', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 6: Reset completo                                      |
+//| ENDPOINT 6: Reset completo (AGGIORNATO CON FLAG)               |
 //+------------------------------------------------------------------+
 app.post('/api/reset', (req, res) => {
   if (req.body.masterkey !== MASTER_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+
+  // NUOVO: Attiva il flag di reset PRIMA di pulire i dati
+  setResetFlag(true, 'Master ha richiesto reset completo');
 
   pendingOrders.clear();
   filledTrades.clear();
@@ -420,15 +513,27 @@ app.post('/api/reset', (req, res) => {
   masterAccountInfo = {};
   connectedSlaves.clear();
 
-  console.log('🧹 RESET COMPLETO - Tutti i dati cancellati');
-  res.json({ status: 'success', message: 'Complete reset performed' });
+  console.log('🧹 RESET COMPLETO - Tutti i dati cancellati, flag reset attivato');
+  res.json({ 
+    status: 'success', 
+    message: 'Complete reset performed',
+    isReset: isReset,
+    resetTimestamp: resetTimestamp
+  });
 });
 
 //+------------------------------------------------------------------+
 //| ENDPOINT 7: Debug - Stato interno                               |
 //+------------------------------------------------------------------+
 app.get('/api/debug', (req, res) => {
+  const count = getTradeCount();
+  
   res.json({
+    tradeCount: count,
+    resetInfo: {
+      isReset: isReset,
+      resetTimestamp: resetTimestamp
+    },
     pendingOrders: Object.fromEntries(pendingOrders),
     filledTrades: Object.fromEntries(filledTrades),
     recentEvents,
@@ -444,10 +549,16 @@ app.post('/api/verify-slave', (req, res) => {
   const { slavekey } = req.body;
   
   if (slavekey === SLAVE_KEY) {
+    const count = getTradeCount();
     res.json({ 
       status: 'authorized',
       message: 'Slave key valid',
-      serverTime: Date.now()
+      serverTime: Date.now(),
+      tradeCount: count,
+      resetInfo: {
+        isReset: isReset,
+        resetTimestamp: resetTimestamp
+      }
     });
   } else {
     res.status(401).json({ 
@@ -457,22 +568,45 @@ app.post('/api/verify-slave', (req, res) => {
   }
 });
 
+//+------------------------------------------------------------------+
+//| NUOVO ENDPOINT: Reset manuale del flag                         |
+//+------------------------------------------------------------------+
+app.post('/api/reset-flag', (req, res) => {
+  if (req.body.masterkey !== MASTER_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { value, reason } = req.body;
+  
+  setResetFlag(value === true, reason || 'Reset flag manuale');
+  
+  res.json({
+    status: 'success',
+    isReset: isReset,
+    resetTimestamp: resetTimestamp,
+    message: `Reset flag impostato a ${isReset}`
+  });
+});
+
 // Avvia server
 app.listen(PORT, () => {
-  console.log(`🚀 EA Advanced Pending API v7.0 avviata su port ${PORT}`);
+  console.log(`🚀 EA Advanced Pending API v7.2 avviata su port ${PORT}`);
   console.log(`📋 Endpoints disponibili:`);
   console.log(`   GET  /api/health           - Health check`);
   console.log(`   POST /api/signals          - Ricevi segnali dal Master`);
   console.log(`   GET  /api/getsignals       - Ottieni segnali per Slave (AUTH)`);
+  console.log(`   GET  /api/tradecount       - Contatore trades semplificato (AUTH)`);
   console.log(`   POST /api/slave-filled     - Slave notifica esecuzione (AUTH)`);
   console.log(`   GET  /api/stats            - Statistiche dettagliate`);
-  console.log(`   POST /api/reset            - Reset completo`);
+  console.log(`   POST /api/reset            - Reset completo (ATTIVA FLAG)`);
+  console.log(`   POST /api/reset-flag       - Reset manuale del flag`);
   console.log(`   GET  /api/debug            - Debug stato interno`);
   console.log(`   POST /api/verify-slave     - Verifica chiave slave`);
   console.log(`🔐 SICUREZZA ATTIVA:`);
   console.log(`   Master Key: ${MASTER_KEY}`);
   console.log(`   Slave Key:  ${SLAVE_KEY}`);
-  console.log(`💡 LOGICA COMPLETA: Pendenti + Trade Fillati + Chiusure Trade + Autenticazione Slave`);
+  console.log(`🚨 NUOVO: SISTEMA RESET FLAG per controllo Slave sincronizzato`);
+  console.log(`💡 LOGICA: Pendenti + Trade Fillati + Chiusure Trade + Reset Flag + Contatore + Auth`);
 });
 
 // Pulizia automatica eventi vecchi ogni 6 ore
