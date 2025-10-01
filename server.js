@@ -20,6 +20,9 @@ let connectedSlaves = new Map();     // slaveKey -> ultimo accesso
 let isReset = false;                 // Flag che indica se il Master ha fatto reset
 let resetTimestamp = null;           // Timestamp dell'ultimo reset
 
+let masterBrokerTime = null;          // Ultimo orario broker ricevuto dal Master
+let lastMasterBrokerUpdate = null;    // Timestamp ultimo aggiornamento
+
 // Chiavi di sicurezza
 const MASTER_KEY = "master_secret_key_2024";
 const SLAVE_KEY = "slave_access_key_2025_08";
@@ -586,6 +589,46 @@ app.post('/api/reset-flag', (req, res) => {
   });
 });
 
+//+------------------------------------------------------------------+
+//| NUOVO ENDPOINT: Aggiornamento orario broker Master              |
+//+------------------------------------------------------------------+
+app.post('/api/broker-time', (req, res) => {
+  const { masterkey, brokerTime } = req.body;
+
+  if (masterkey !== MASTER_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  if (brokerTime && typeof brokerTime === 'string') {
+    masterBrokerTime = brokerTime;
+    lastMasterBrokerUpdate = new Date();
+    console.log(`🕐 Orario Broker Master aggiornato: ${brokerTime}`);
+    
+    res.json({ 
+      status: 'success',
+      brokerTime: masterBrokerTime,
+      serverTime: Date.now()
+    });
+  } else {
+    res.status(400).json({ 
+      error: 'Invalid broker time',
+      message: 'brokerTime field is required'
+    });
+  }
+});
+
+//+------------------------------------------------------------------+
+//| NUOVO ENDPOINT: Ottieni orario broker Master (solo lettura)     |
+//+------------------------------------------------------------------+
+app.get('/api/broker-time', (req, res) => {
+  res.json({
+    brokerTime: masterBrokerTime,
+    lastUpdate: lastMasterBrokerUpdate,
+    serverTime: Date.now(),
+    status: masterBrokerTime ? 'available' : 'not_synced'
+  });
+});
+
 // Avvia server
 app.listen(PORT, () => {
   console.log(`🚀 EA Advanced Pending API v7.2 avviata su port ${PORT}`);
@@ -595,6 +638,7 @@ app.listen(PORT, () => {
   console.log(`   GET  /api/getsignals       - Ottieni segnali per Slave (AUTH)`);
   console.log(`   GET  /api/tradecount       - Contatore trades semplificato (AUTH)`);
   console.log(`   POST /api/slave-filled     - Slave notifica esecuzione (AUTH)`);
+  console.log(`   POST /api/broker-time      - Aggiorna orario broker Master`);  // NUOVO
   console.log(`   GET  /api/stats            - Statistiche dettagliate`);
   console.log(`   POST /api/reset            - Reset completo (ATTIVA FLAG)`);
   console.log(`   POST /api/reset-flag       - Reset manuale del flag`);
