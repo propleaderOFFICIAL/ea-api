@@ -153,28 +153,30 @@ app.post('/api/signals', (req, res) => {
     }
 
     const pendingOrder = {
-      signalType: 'pending',
-      ticket: ticketNum,
-      symbol,
-      type,
-      lots,
-      price,
-      sl,
-      tp,
-      time,
-      comment,
-      expiration,
-      barsFromPlacement: barsFromPlacement || 0,
-      timeframe: timeframe || 0,
-      timeframeName: timeframeName || 'Unknown',
-      timestamp
-    };
+  signalType: 'pending',
+  ticket: ticketNum,
+  symbol,
+  type,
+  lots,
+  price,
+  sl,
+  tp,
+  time,
+  comment,
+  expiration,
+  barsFromPlacement: barsFromPlacement || 0,
+  timeframe: timeframe || 0,
+  timeframeName: timeframeName || 'Unknown',
+  barTimestamp: req.body.barTimestamp || null,  // ← AGGIUNGI QUESTA RIGA
+  timestamp
+};
     
     pendingOrders.set(ticketNum, pendingOrder);
     if (account) updateMasterAccountInfo(account);
     
-    const count = getTradeCount();
-    console.log(`🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Totali: ${count.totalTrades}, Reset: ${isReset})`);
+    // E poi modifica il log:
+const logMsg = `🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Totali: ${count.totalTrades}, Reset: ${isReset})`;
+console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}` : logMsg);
 
   } else if (action === 'modify') {
     // Modifica ordine pendente - SOLO se non è fillato
@@ -187,18 +189,19 @@ app.post('/api/signals', (req, res) => {
     if (pendingOrders.has(ticketNum)) {
       const existing = pendingOrders.get(ticketNum);
       const updated = {
-        ...existing,
-        lots,
-        price,
-        sl,
-        tp,
-        expiration,
-        barsFromPlacement: barsFromPlacement || existing.barsFromPlacement,
-        timeframe: timeframe || existing.timeframe,
-        timeframeName: timeframeName || existing.timeframeName,
-        modified: true,
-        timestamp
-      };
+  ...existing,
+  lots,
+  price,
+  sl,
+  tp,
+  expiration,
+  barsFromPlacement: barsFromPlacement || existing.barsFromPlacement,
+  timeframe: timeframe || existing.timeframe,
+  timeframeName: timeframeName || existing.timeframeName,
+  barTimestamp: req.body.barTimestamp || existing.barTimestamp,  // ← AGGIUNGI QUESTA RIGA
+  modified: true,
+  timestamp
+};
       
       pendingOrders.set(ticketNum, updated);
       
@@ -255,23 +258,18 @@ app.post('/api/signals', (req, res) => {
       // Sposta da pendenti a fillati
       pendingOrders.delete(ticketNum);
       
-      const filledTrade = {
-        signalType: 'filled',
-        originalTicket: ticketNum,
-        symbol: originalPending.symbol,
-        type: originalPending.type,
-        lots: originalPending.lots,
-        originalPrice: originalPending.price,
-        fillPrice: price || originalPending.price,
-        sl: originalPending.sl,
-        tp: originalPending.tp,
-        fillTime: time,
-        timestamp,
-        // Mantieni dati originali per lo slave
-        barsFromPlacement: originalPending.barsFromPlacement,
-        timeframe: originalPending.timeframe,
-        timeframeName: originalPending.timeframeName
-      };
+      const updated = {
+  ...existing,
+  barsFromPlacement: barsFromPlacement,
+  timeframe: timeframe || existing.timeframe,
+  timeframeName: timeframeName || existing.timeframeName,
+  barTimestamp: req.body.barTimestamp || existing.barTimestamp,  // ← AGGIUNGI QUESTA RIGA
+  lastBarsUpdate: timestamp
+};
+
+// E poi modifica il log:
+const logMsg = `📊 BARRE AGGIORNATE SILENZIOSAMENTE - Ticket: #${ticket} -> ${barsFromPlacement} barre`;
+console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}` : logMsg);
       
       filledTrades.set(ticketNum, filledTrade);
       
