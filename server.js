@@ -176,7 +176,8 @@ app.post('/api/signals', (req, res) => {
     
     pendingOrders.set(ticketNum, pendingOrder);
     if (account) updateMasterAccountInfo(account);
-    
+
+    const count = getTradeCount(); 
     // E poi modifica il log:
 const logMsg = `🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Totali: ${count.totalTrades}, Reset: ${isReset})`;
 console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}` : logMsg);
@@ -417,7 +418,7 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
   } else {
     response.recentEvents = recentEvents;
   }
-
+  
   console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}, totalTrades=${count.totalTrades}, isReset=${isReset}`);
 
   res.json(response);
