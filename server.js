@@ -13,7 +13,9 @@ app.use(bodyParser.json());
 let pendingOrders = new Map();       // ticket -> dati ordini pendenti attivi
 let filledTrades = new Map();        // ticket -> dati trade fillati dal Master  
 let recentEvents = [];               // eventi recenti (cancel, modify, trade_closed)
-let masterAccountInfo = {};          // ultima informazione account Master
+let masterAccountInfo = {
+  slaveAutoCloseFilledTrades: false  // 🆕 AGGIUNTO - default false
+};
 let connectedSlaves = new Map();     // slaveKey -> ultimo accesso
 
 // NUOVO: Flag di reset
@@ -400,10 +402,14 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
       filledTrades: count.filledTrades,
       totalTrades: count.totalTrades
     },
-    // NUOVO: Flag di reset
+    // FLAG DI RESET
     resetInfo: {
       isReset: isReset,
       resetTimestamp: resetTimestamp
+    },
+    // 🆕 CONFIGURAZIONE SLAVE
+    slaveConfig: {
+      autoCloseFilledTrades: masterAccountInfo.slaveAutoCloseFilledTrades || false
     }
   };
 
@@ -419,7 +425,7 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
     response.recentEvents = recentEvents;
   }
   
-  console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}, totalTrades=${count.totalTrades}, isReset=${isReset}`);
+  console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}, totalTrades=${count.totalTrades}, isReset=${isReset}, autoClose=${response.slaveConfig.autoCloseFilledTrades}`);
 
   res.json(response);
 });
@@ -591,10 +597,10 @@ app.post('/api/reset-flag', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| NUOVO ENDPOINT: Aggiornamento orario broker Master              |
+//| ENDPOINT: Aggiornamento orario broker Master + Config Slave     |
 //+------------------------------------------------------------------+
 app.post('/api/broker-time', (req, res) => {
-  const { masterkey, brokerTime } = req.body;
+  const { masterkey, brokerTime, slaveAutoCloseFilledTrades } = req.body;
 
   if (masterkey !== MASTER_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
@@ -603,11 +609,19 @@ app.post('/api/broker-time', (req, res) => {
   if (brokerTime && typeof brokerTime === 'string') {
     masterBrokerTime = brokerTime;
     lastMasterBrokerUpdate = new Date();
+    
+    // 🆕 SALVA LA CONFIGURAZIONE SLAVE
+    if (typeof slaveAutoCloseFilledTrades === 'boolean') {
+      masterAccountInfo.slaveAutoCloseFilledTrades = slaveAutoCloseFilledTrades;
+      console.log(`⚙️ Config Slave aggiornata: AutoClose=${slaveAutoCloseFilledTrades}`);
+    }
+    
     console.log(`🕐 Orario Broker Master aggiornato: ${brokerTime}`);
     
     res.json({ 
       status: 'success',
       brokerTime: masterBrokerTime,
+      slaveAutoCloseFilledTrades: masterAccountInfo.slaveAutoCloseFilledTrades,
       serverTime: Date.now()
     });
   } else {
