@@ -10,26 +10,33 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // Database in memoria
-let pendingOrders = new Map();       // ticket -> dati ordini pendenti attivi
-let filledTrades = new Map();        // ticket -> dati trade fillati dal Master  
-let recentEvents = [];               // eventi recenti (cancel, modify, trade_closed)
-let masterAccountInfo = {
-  slaveAutoCloseFilledTrades: false  // 🆕 AGGIUNTO - default false
+let pendingOrders = new Map();
+let filledTrades = new Map();
+let recentEvents = [];
+let masterAccountInfo = {};  // ← Solo dati account, SENZA slaveAutoCloseFilledTrades
+let connectedSlaves = new Map();
+
+// 🔥 VARIABILE SEPARATA PER LA CONFIGURAZIONE SLAVE (FIX PRINCIPALE)
+let slaveConfig = {
+  autoCloseFilledTrades: false,
+  lastUpdate: null
 };
-let connectedSlaves = new Map();     // slaveKey -> ultimo accesso
 
-// NUOVO: Flag di reset
-let isReset = false;                 // Flag che indica se il Master ha fatto reset
-let resetTimestamp = null;           // Timestamp dell'ultimo reset
+// Flag di reset
+let isReset = false;
+let resetTimestamp = null;
 
-let masterBrokerTime = null;          // Ultimo orario broker ricevuto dal Master
-let lastMasterBrokerUpdate = null;    // Timestamp ultimo aggiornamento
+// Broker time
+let masterBrokerTime = null;
+let lastMasterBrokerUpdate = null;
 
 // Chiavi di sicurezza
 const MASTER_KEY = "master_secret_key_2024";
 const SLAVE_KEY = "slave_access_key_2025_08";
 
-// Middleware per autenticazione Slave
+//+------------------------------------------------------------------+
+//| Middleware per autenticazione Slave                              |
+//+------------------------------------------------------------------+
 function authenticateSlave(req, res, next) {
   const { slavekey } = req.query;
   
@@ -40,7 +47,6 @@ function authenticateSlave(req, res, next) {
     });
   }
   
-  // Registra accesso slave
   const slaveId = req.ip + '_' + (req.headers['user-agent'] || 'unknown');
   connectedSlaves.set(slaveId, {
     lastAccess: new Date(),
@@ -51,7 +57,9 @@ function authenticateSlave(req, res, next) {
   next();
 }
 
-// Funzione per aggiornare informazioni account Master
+//+------------------------------------------------------------------+
+//| 🔥 FUNZIONE CORRETTA: Non tocca più slaveConfig                  |
+//+------------------------------------------------------------------+
 function updateMasterAccountInfo(accountData) {
   if (accountData && typeof accountData === 'object') {
     masterAccountInfo = {
@@ -62,7 +70,9 @@ function updateMasterAccountInfo(accountData) {
   }
 }
 
-// NUOVA FUNZIONE: Conta tutti i trades nel server
+//+------------------------------------------------------------------+
+//| Conta trades                                                      |
+//+------------------------------------------------------------------+
 function getTradeCount() {
   return {
     pendingOrders: pendingOrders.size,
@@ -71,7 +81,9 @@ function getTradeCount() {
   };
 }
 
-// NUOVA FUNZIONE: Gestisce il flag di reset
+//+------------------------------------------------------------------+
+//| Gestisce flag reset                                              |
+//+------------------------------------------------------------------+
 function setResetFlag(value, reason = '') {
   const wasReset = isReset;
   isReset = value;
@@ -87,12 +99,12 @@ function setResetFlag(value, reason = '') {
 }
 
 //+------------------------------------------------------------------+
-//| ENDPOINT: Contatore Trades con Flag Reset                      |
+//| ENDPOINT: Contatore Trades                                       |
 //+------------------------------------------------------------------+
 app.get('/api/tradecount', authenticateSlave, (req, res) => {
   const count = getTradeCount();
   
-  console.log(`📊 CONTATORE RICHIESTO: Pendenti=${count.pendingOrders}, Fillati=${count.filledTrades}, Totali=${count.totalTrades}, Reset=${isReset}`);
+  console.log(`📊 CONTATORE: Pendenti=${count.pendingOrders}, Fillati=${count.filledTrades}, Reset=${isReset}`);
   
   res.json({
     pendingOrders: count.pendingOrders,
@@ -106,7 +118,7 @@ app.get('/api/tradecount', authenticateSlave, (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 1: Health Check                                        |
+//| ENDPOINT: Health Check                                           |
 //+------------------------------------------------------------------+
 app.get('/api/health', (req, res) => {
   const count = getTradeCount();
@@ -121,17 +133,18 @@ app.get('/api/health', (req, res) => {
     resetTimestamp: resetTimestamp,
     recentEvents: recentEvents.length,
     connectedSlaves: connectedSlaves.size,
-    masterAccount: masterAccountInfo.number || 'N/A'
+    masterAccount: masterAccountInfo.number || 'N/A',
+    slaveAutoClose: slaveConfig.autoCloseFilledTrades
   });
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 2: Master invia segnali                                |
+//| ENDPOINT: Master invia segnali                                   |
 //+------------------------------------------------------------------+
 app.post('/api/signals', (req, res) => {
   const {
     masterkey, action, ticket, symbol, type, lots, price, sl, tp, time, comment,
-    expiration, account, barsFromPlacement, timeframe, timeframeName,
+    expiration, account, barsFromPlacement, timeframe, timeframeName, barTimestamp,
     openPrice, closePrice, openTime, closeTime, profit, swap, commission
   } = req.body;
 
@@ -142,7 +155,7 @@ app.post('/api/signals', (req, res) => {
   const timestamp = new Date();
   const ticketNum = parseInt(ticket);
 
-  // IMPORTANTE: Quando il Master invia qualsiasi segnale di trading, disattiva il reset
+  // Disattiva reset se arriva un segnale di trading
   if (action === 'pending' || action === 'modify' || action === 'filled') {
     if (isReset) {
       setResetFlag(false, `Master ha inviato ${action} per ticket #${ticket}`);
@@ -150,44 +163,40 @@ app.post('/api/signals', (req, res) => {
   }
 
   if (action === 'pending') {
-    // Nuovo ordine pendente - SOLO se non è già stato fillato
     if (filledTrades.has(ticketNum)) {
-      console.log(`⚠️ PENDENTE GIÀ FILLATO: #${ticket} non aggiunto (già eseguito nel Master)`);
+      console.log(`⚠️ PENDENTE GIÀ FILLATO: #${ticket}`);
       res.json({ status: 'already_filled' });
       return;
     }
 
     const pendingOrder = {
-  signalType: 'pending',
-  ticket: ticketNum,
-  symbol,
-  type,
-  lots,
-  price,
-  sl,
-  tp,
-  time,
-  comment,
-  expiration,
-  barsFromPlacement: barsFromPlacement || 0,
-  timeframe: timeframe || 0,
-  timeframeName: timeframeName || 'Unknown',
-  barTimestamp: req.body.barTimestamp || null,  // ← AGGIUNGI QUESTA RIGA
-  timestamp
-};
+      signalType: 'pending',
+      ticket: ticketNum,
+      symbol,
+      type,
+      lots,
+      price,
+      sl,
+      tp,
+      time,
+      comment,
+      expiration,
+      barsFromPlacement: barsFromPlacement || 0,
+      timeframe: timeframe || 0,
+      timeframeName: timeframeName || 'Unknown',
+      barTimestamp: barTimestamp || null,
+      timestamp
+    };
     
     pendingOrders.set(ticketNum, pendingOrder);
     if (account) updateMasterAccountInfo(account);
 
-    const count = getTradeCount(); 
-    // E poi modifica il log:
-const logMsg = `🟡 PENDENTE AGGIUNTO - Ticket: #${ticket} ${symbol} @ ${price} (Totali: ${count.totalTrades}, Reset: ${isReset})`;
-console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}` : logMsg);
+    const count = getTradeCount();
+    console.log(`🟡 PENDENTE #${ticket} ${symbol} @ ${price} (Tot: ${count.totalTrades}, AutoClose: ${slaveConfig.autoCloseFilledTrades})`);
 
   } else if (action === 'modify') {
-    // Modifica ordine pendente - SOLO se non è fillato
     if (filledTrades.has(ticketNum)) {
-      console.log(`⚠️ MODIFY IGNORATO: #${ticket} già fillato nel Master`);
+      console.log(`⚠️ MODIFY IGNORATO: #${ticket} già fillato`);
       res.json({ status: 'already_filled' });
       return;
     }
@@ -195,23 +204,22 @@ console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}
     if (pendingOrders.has(ticketNum)) {
       const existing = pendingOrders.get(ticketNum);
       const updated = {
-  ...existing,
-  lots,
-  price,
-  sl,
-  tp,
-  expiration,
-  barsFromPlacement: barsFromPlacement || existing.barsFromPlacement,
-  timeframe: timeframe || existing.timeframe,
-  timeframeName: timeframeName || existing.timeframeName,
-  barTimestamp: req.body.barTimestamp || existing.barTimestamp,  // ← AGGIUNGI QUESTA RIGA
-  modified: true,
-  timestamp
-};
+        ...existing,
+        lots,
+        price,
+        sl,
+        tp,
+        expiration,
+        barsFromPlacement: barsFromPlacement || existing.barsFromPlacement,
+        timeframe: timeframe || existing.timeframe,
+        timeframeName: timeframeName || existing.timeframeName,
+        barTimestamp: barTimestamp || existing.barTimestamp,
+        modified: true,
+        timestamp
+      };
       
       pendingOrders.set(ticketNum, updated);
       
-      // Aggiungi evento di modifica
       recentEvents.push({
         signalType: 'modify',
         action: 'modify',
@@ -224,18 +232,15 @@ console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}
         barsFromPlacement,
         timeframe,
         timeframeName,
+        barTimestamp,
         timestamp
       });
       
       if (account) updateMasterAccountInfo(account);
-      console.log(`🔄 PENDENTE MODIFICATO - Ticket: #${ticket} @ ${price}`);
-      
-    } else {
-      console.warn(`⚠️ Tentativo di modificare pendente non esistente: #${ticket}`);
+      console.log(`🔄 MODIFICATO #${ticket} @ ${price}`);
     }
 
   } else if (action === 'silentBarsUpdate') {
-    // Aggiornamento silenzioso delle barre per nuovi Slave
     if (pendingOrders.has(ticketNum)) {
       const existing = pendingOrders.get(ticketNum);
       const updated = {
@@ -243,65 +248,40 @@ console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}
         barsFromPlacement: barsFromPlacement,
         timeframe: timeframe || existing.timeframe,
         timeframeName: timeframeName || existing.timeframeName,
+        barTimestamp: barTimestamp || existing.barTimestamp,
         lastBarsUpdate: timestamp
       };
       
       pendingOrders.set(ticketNum, updated);
-      
-      console.log(`📊 BARRE AGGIORNATE SILENZIOSAMENTE - Ticket: #${ticket} -> ${barsFromPlacement} barre`);
-      
-    } else {
-      console.warn(`⚠️ Tentativo di aggiornare barre per pendente non esistente: #${ticket}`);
+      console.log(`📊 BARRE AGGIORNATE #${ticket} -> ${barsFromPlacement}`);
     }
 
     if (account) updateMasterAccountInfo(account);
 
   } else if (action === 'filled') {
-    // Pendente eseguito nel Master
     if (pendingOrders.has(ticketNum)) {
       const originalPending = pendingOrders.get(ticketNum);
-      
-      // Sposta da pendenti a fillati
       pendingOrders.delete(ticketNum);
       
-      const updated = {
-  ...existing,
-  barsFromPlacement: barsFromPlacement,
-  timeframe: timeframe || existing.timeframe,
-  timeframeName: timeframeName || existing.timeframeName,
-  barTimestamp: req.body.barTimestamp || existing.barTimestamp,  // ← AGGIUNGI QUESTA RIGA
-  lastBarsUpdate: timestamp
-};
-
-// E poi modifica il log:
-const logMsg = `📊 BARRE AGGIORNATE SILENZIOSAMENTE - Ticket: #${ticket} -> ${barsFromPlacement} barre`;
-console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}` : logMsg);
+      const filledTrade = {
+        ...originalPending,
+        signalType: 'filled',
+        originalTicket: ticketNum,
+        filledTime: time,
+        timestamp
+      };
       
       filledTrades.set(ticketNum, filledTrade);
       
-      // Rimuovi eventi obsoleti per questo ticket
-      const eventsBefore = recentEvents.length;
-      recentEvents = recentEvents.filter(event => {
-        return !(event.ticket && event.ticket === ticketNum);
-      });
-      const eventsAfter = recentEvents.length;
-      const removedEvents = eventsBefore - eventsAfter;
+      recentEvents = recentEvents.filter(event => event.ticket !== ticketNum);
       
       const count = getTradeCount();
-      console.log(`🔵 PENDENTE FILLATO NEL MASTER - Ticket: #${ticket} ${originalPending.symbol}`);
-      console.log(`📊 STATO SERVER: Pendenti: ${count.pendingOrders}, Fillati: ${count.filledTrades}, Totali: ${count.totalTrades}, Reset: ${isReset}`);
-      if (removedEvents > 0) {
-        console.log(`🧹 Rimossi ${removedEvents} eventi obsoleti per ticket #${ticket}`);
-      }
-      
-    } else {
-      console.warn(`⚠️ 'filled' per pendente non tracciato: #${ticket}`);
+      console.log(`🔵 FILLATO #${ticket} ${originalPending.symbol} (Tot: ${count.totalTrades})`);
     }
 
     if (account) updateMasterAccountInfo(account);
 
   } else if (action === 'trade_closed') {
-    // Trade chiuso nel Master
     const closedTrade = {
       signalType: 'trade_closed',
       ticket: ticketNum,
@@ -319,37 +299,21 @@ console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}
       timestamp
     };
     
-    // Rimuovi il trade dai fillati se presente
     if (filledTrades.has(ticketNum)) {
       filledTrades.delete(ticketNum);
-      console.log(`🔴 TRADE FILLATO CHIUSO E RIMOSSO - Ticket: #${ticket} ${symbol} Profit: ${profit}`);
-    } else {
-      console.log(`🔴 TRADE CHIUSO - Ticket: #${ticket} ${symbol} Profit: ${profit}`);
+      console.log(`🔴 TRADE CHIUSO #${ticket} ${symbol} P:${profit} (AutoClose: ${slaveConfig.autoCloseFilledTrades})`);
     }
     
-    // Aggiungi agli eventi recenti
     recentEvents.push(closedTrade);
-    
     if (account) updateMasterAccountInfo(account);
-    
-    const count = getTradeCount();
-    console.log(`📊 STATO DOPO CHIUSURA: Pendenti: ${count.pendingOrders}, Fillati: ${count.filledTrades}, Totali: ${count.totalTrades}, Reset: ${isReset}`);
 
   } else if (action === 'cancel') {
-    // Ordine pendente cancellato manualmente dal Master
     if (pendingOrders.has(ticketNum)) {
       const cancelledOrder = pendingOrders.get(ticketNum);
       pendingOrders.delete(ticketNum);
       
-      // Rimuovi eventi correlati
-      const eventsBefore = recentEvents.length;
-      recentEvents = recentEvents.filter(event => {
-        return !(event.ticket && event.ticket === ticketNum);
-      });
-      const eventsAfter = recentEvents.length;
-      const removedEvents = eventsBefore - eventsAfter;
+      recentEvents = recentEvents.filter(event => event.ticket !== ticketNum);
       
-      // Aggiungi evento di cancellazione
       recentEvents.push({
         signalType: 'cancel',
         action: 'cancel',
@@ -360,18 +324,7 @@ console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}
       });
       
       if (account) updateMasterAccountInfo(account);
-      
-      const count = getTradeCount();
-      console.log(`❌ PENDENTE CANCELLATO - Ticket: #${ticket} (Totali: ${count.totalTrades}, Reset: ${isReset})`);
-      if (removedEvents > 0) {
-        console.log(`🧹 Rimossi ${removedEvents} eventi obsoleti per ticket #${ticket}`);
-      }
-      
-    } else if (filledTrades.has(ticketNum)) {
-      // Tentativo di cancellare un trade già fillato - ignora
-      console.log(`ℹ️ CANCEL IGNORATO: #${ticket} già fillato, non più cancellabile`);
-    } else {
-      console.warn(`⚠️ Tentativo di cancellare pendente non esistente: #${ticket}`);
+      console.log(`❌ CANCELLATO #${ticket}`);
     }
   }
 
@@ -384,7 +337,7 @@ console.log(req.body.barTimestamp ? logMsg + ` BarTime: ${req.body.barTimestamp}
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 3: Client get signals (CON FLAG RESET)                 |
+//| ENDPOINT: Get signals (CON SLAVE CONFIG SEPARATA)               |
 //+------------------------------------------------------------------+
 app.get('/api/getsignals', authenticateSlave, (req, res) => {
   const { lastsync } = req.query;
@@ -396,28 +349,25 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
     recentEvents: [],
     masterAccount: masterAccountInfo,
     serverTime: Date.now(),
-    // CONTATORE TRADES
     tradeCount: {
       pendingOrders: count.pendingOrders,
       filledTrades: count.filledTrades,
       totalTrades: count.totalTrades
     },
-    // FLAG DI RESET
     resetInfo: {
       isReset: isReset,
       resetTimestamp: resetTimestamp
     },
-    // 🆕 CONFIGURAZIONE SLAVE
+    // 🔥 USA LA VARIABILE SEPARATA - FIX PRINCIPALE
     slaveConfig: {
-      autoCloseFilledTrades: masterAccountInfo.slaveAutoCloseFilledTrades || false
+      autoCloseFilledTrades: slaveConfig.autoCloseFilledTrades,
+      lastUpdate: slaveConfig.lastUpdate
     }
   };
 
-  // Converti Maps in Arrays
   pendingOrders.forEach(order => response.pendingOrders.push(order));
   filledTrades.forEach(trade => response.filledTrades.push(trade));
 
-  // Filtra eventi recenti se lastsync è specificato
   if (lastsync) {
     const syncTime = new Date(parseInt(lastsync));
     response.recentEvents = recentEvents.filter(event => event.timestamp > syncTime);
@@ -425,38 +375,36 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
     response.recentEvents = recentEvents;
   }
   
-  console.log(`📤 Segnali inviati a SLAVE: pendingOrders=${response.pendingOrders.length}, filledTrades=${response.filledTrades.length}, recentEvents=${response.recentEvents.length}, totalTrades=${count.totalTrades}, isReset=${isReset}, autoClose=${response.slaveConfig.autoCloseFilledTrades}`);
+  console.log(`📤 Segnali a SLAVE: pending=${response.pendingOrders.length}, filled=${response.filledTrades.length}, events=${response.recentEvents.length}, autoClose=${response.slaveConfig.autoCloseFilledTrades}`);
 
   res.json(response);
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 4: Slave notifica esecuzione locale (CON AUTH)         |
+//| ENDPOINT: Slave notifica esecuzione                              |
 //+------------------------------------------------------------------+
 app.post('/api/slave-filled', authenticateSlave, (req, res) => {
   const { ticket } = req.body;
   const ticketNum = parseInt(ticket);
   
   if (filledTrades.has(ticketNum)) {
-    // Rimuovi il trade fillato quando lo slave conferma l'esecuzione
     filledTrades.delete(ticketNum);
     const count = getTradeCount();
-    console.log(`✅ SLAVE CONFERMA ESECUZIONE: Ticket #${ticket} rimosso dai fillati (Totali nel server: ${count.totalTrades})`);
+    console.log(`✅ SLAVE CONFERMA ESECUZIONE: #${ticket} (Tot: ${count.totalTrades})`);
     res.json({ status: 'confirmed' });
   } else {
-    console.warn(`⚠️ Slave conferma esecuzione per ticket non fillato: #${ticket}`);
+    console.warn(`⚠️ Slave conferma per ticket non fillato: #${ticket}`);
     res.json({ status: 'not_found' });
   }
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 5: Statistiche dettagliate                             |
+//| ENDPOINT: Statistiche dettagliate                                |
 //+------------------------------------------------------------------+
 app.get('/api/stats', (req, res) => {
   const count = getTradeCount();
   const stats = {};
   
-  // Analisi per simbolo
   pendingOrders.forEach(order => {
     if (!stats[order.symbol]) {
       stats[order.symbol] = { pendingOrders: 0, filledTrades: 0, timeframes: [] };
@@ -474,7 +422,7 @@ app.get('/api/stats', (req, res) => {
     stats[trade.symbol].filledTrades++;
   });
 
-  // Pulisci slave disconnessi (oltre 5 minuti)
+  // Pulisci slave disconnessi
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
   connectedSlaves.forEach((data, slaveId) => {
     if (data.lastAccess < fiveMinutesAgo) {
@@ -495,6 +443,7 @@ app.get('/api/stats', (req, res) => {
     symbolBreakdown: stats,
     recentEvents: recentEvents.slice(-10),
     masterAccount: masterAccountInfo,
+    slaveConfig: slaveConfig,
     connectedSlaves: Array.from(connectedSlaves.entries()).map(([id, data]) => ({
       id: id.substr(0, 20) + '...',
       lastAccess: data.lastAccess,
@@ -505,14 +454,13 @@ app.get('/api/stats', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 6: Reset completo (AGGIORNATO CON FLAG)               |
+//| ENDPOINT: Reset completo                                         |
 //+------------------------------------------------------------------+
 app.post('/api/reset', (req, res) => {
   if (req.body.masterkey !== MASTER_KEY) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
-  // NUOVO: Attiva il flag di reset PRIMA di pulire i dati
   setResetFlag(true, 'Master ha richiesto reset completo');
 
   pendingOrders.clear();
@@ -521,7 +469,7 @@ app.post('/api/reset', (req, res) => {
   masterAccountInfo = {};
   connectedSlaves.clear();
 
-  console.log('🧹 RESET COMPLETO - Tutti i dati cancellati, flag reset attivato');
+  console.log('🧹 RESET COMPLETO');
   res.json({ 
     status: 'success', 
     message: 'Complete reset performed',
@@ -531,7 +479,7 @@ app.post('/api/reset', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 7: Debug - Stato interno                               |
+//| ENDPOINT: Debug                                                  |
 //+------------------------------------------------------------------+
 app.get('/api/debug', (req, res) => {
   const count = getTradeCount();
@@ -542,6 +490,7 @@ app.get('/api/debug', (req, res) => {
       isReset: isReset,
       resetTimestamp: resetTimestamp
     },
+    slaveConfig: slaveConfig,
     pendingOrders: Object.fromEntries(pendingOrders),
     filledTrades: Object.fromEntries(filledTrades),
     recentEvents,
@@ -551,7 +500,7 @@ app.get('/api/debug', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT 8: Verifica chiave slave                               |
+//| ENDPOINT: Verifica chiave slave                                  |
 //+------------------------------------------------------------------+
 app.post('/api/verify-slave', (req, res) => {
   const { slavekey } = req.body;
@@ -577,7 +526,7 @@ app.post('/api/verify-slave', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| NUOVO ENDPOINT: Reset manuale del flag                         |
+//| ENDPOINT: Reset flag manuale                                     |
 //+------------------------------------------------------------------+
 app.post('/api/reset-flag', (req, res) => {
   if (req.body.masterkey !== MASTER_KEY) {
@@ -597,7 +546,7 @@ app.post('/api/reset-flag', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| ENDPOINT: Aggiornamento orario broker Master + Config Slave     |
+//| ENDPOINT: Broker time + Config Slave (CORRETTO)                  |
 //+------------------------------------------------------------------+
 app.post('/api/broker-time', (req, res) => {
   const { masterkey, brokerTime, slaveAutoCloseFilledTrades } = req.body;
@@ -610,18 +559,19 @@ app.post('/api/broker-time', (req, res) => {
     masterBrokerTime = brokerTime;
     lastMasterBrokerUpdate = new Date();
     
-    // 🆕 SALVA LA CONFIGURAZIONE SLAVE
+    // 🔥 SALVA NELLA VARIABILE SEPARATA - FIX PRINCIPALE
     if (typeof slaveAutoCloseFilledTrades === 'boolean') {
-      masterAccountInfo.slaveAutoCloseFilledTrades = slaveAutoCloseFilledTrades;
+      slaveConfig.autoCloseFilledTrades = slaveAutoCloseFilledTrades;
+      slaveConfig.lastUpdate = new Date();
       console.log(`⚙️ Config Slave aggiornata: AutoClose=${slaveAutoCloseFilledTrades}`);
     }
     
-    console.log(`🕐 Orario Broker Master aggiornato: ${brokerTime}`);
+    console.log(`🕐 Orario Broker Master: ${brokerTime}`);
     
     res.json({ 
       status: 'success',
       brokerTime: masterBrokerTime,
-      slaveAutoCloseFilledTrades: masterAccountInfo.slaveAutoCloseFilledTrades,
+      slaveAutoCloseFilledTrades: slaveConfig.autoCloseFilledTrades,
       serverTime: Date.now()
     });
   } else {
@@ -633,7 +583,7 @@ app.post('/api/broker-time', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
-//| NUOVO ENDPOINT: Ottieni orario broker Master (solo lettura)     |
+//| ENDPOINT: Get broker time                                        |
 //+------------------------------------------------------------------+
 app.get('/api/broker-time', (req, res) => {
   res.json({
@@ -644,16 +594,19 @@ app.get('/api/broker-time', (req, res) => {
   });
 });
 
-// Avvia server
+//+------------------------------------------------------------------+
+//| Avvia server                                                     |
+//+------------------------------------------------------------------+
 app.listen(PORT, () => {
-  console.log(`🚀 EA Advanced Pending API v7.2 avviata su port ${PORT}`);
+  console.log(`🚀 EA Advanced Pending API v8.0 (FIXED) avviata su port ${PORT}`);
   console.log(`📋 Endpoints disponibili:`);
   console.log(`   GET  /api/health           - Health check`);
   console.log(`   POST /api/signals          - Ricevi segnali dal Master`);
   console.log(`   GET  /api/getsignals       - Ottieni segnali per Slave (AUTH)`);
-  console.log(`   GET  /api/tradecount       - Contatore trades semplificato (AUTH)`);
+  console.log(`   GET  /api/tradecount       - Contatore trades (AUTH)`);
   console.log(`   POST /api/slave-filled     - Slave notifica esecuzione (AUTH)`);
-  console.log(`   POST /api/broker-time      - Aggiorna orario broker Master`);  // NUOVO
+  console.log(`   POST /api/broker-time      - Aggiorna orario broker + Config Slave`);
+  console.log(`   GET  /api/broker-time      - Leggi orario broker`);
   console.log(`   GET  /api/stats            - Statistiche dettagliate`);
   console.log(`   POST /api/reset            - Reset completo (ATTIVA FLAG)`);
   console.log(`   POST /api/reset-flag       - Reset manuale del flag`);
@@ -662,11 +615,13 @@ app.listen(PORT, () => {
   console.log(`🔐 SICUREZZA ATTIVA:`);
   console.log(`   Master Key: ${MASTER_KEY}`);
   console.log(`   Slave Key:  ${SLAVE_KEY}`);
-  console.log(`🚨 NUOVO: SISTEMA RESET FLAG per controllo Slave sincronizzato`);
-  console.log(`💡 LOGICA: Pendenti + Trade Fillati + Chiusure Trade + Reset Flag + Contatore + Auth`);
+  console.log(`🔧 FIX APPLICATO: slaveConfig separato da masterAccountInfo`);
+  console.log(`💡 LOGICA: Pendenti + Fillati + Reset Flag + Slave Config INDIPENDENTE`);
 });
 
-// Pulizia automatica eventi vecchi ogni 6 ore
+//+------------------------------------------------------------------+
+//| Pulizia automatica eventi vecchi                                 |
+//+------------------------------------------------------------------+
 setInterval(() => {
   const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
   const before = recentEvents.length;
@@ -676,7 +631,7 @@ setInterval(() => {
     console.log(`🧹 Pulizia automatica: rimossi ${before - recentEvents.length} eventi vecchi`);
   }
   
-  // Pulisci anche slave disconnessi
+  // Pulisci slave disconnessi
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
   const slavesBefore = connectedSlaves.size;
   connectedSlaves.forEach((data, slaveId) => {
