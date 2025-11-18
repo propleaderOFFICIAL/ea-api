@@ -620,27 +620,39 @@ app.listen(PORT, () => {
 });
 
 //+------------------------------------------------------------------+
-//| Pulizia automatica eventi vecchi                                 |
+//| Pulizia automatica periodica                                     |
 //+------------------------------------------------------------------+
 setInterval(() => {
-  const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
-  const before = recentEvents.length;
-  recentEvents = recentEvents.filter(event => event.timestamp > cutoff);
+  // 1. Pulizia remoteTrades (ogni 10 secondi)
+  const now = new Date();
+  const beforeTrades = remoteTrades.length;
+  remoteTrades = remoteTrades.filter(t => !t.executed && t.expires > now);
   
-  if (recentEvents.length !== before) {
-    console.log(`🧹 Pulizia automatica: rimossi ${before - recentEvents.length} eventi vecchi`);
+  if (remoteTrades.length !== beforeTrades) {
+    console.log(`🧹 Cleanup remoteTrades: ${beforeTrades} -> ${remoteTrades.length}`);
+  }
+}, 10000);
+
+setInterval(() => {
+  // 2. Pulizia recentCommands (ogni 6 ore)
+  const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
+  const before = recentCommands.length;
+  recentCommands = recentCommands.filter(cmd => cmd.timestamp > cutoff);
+  
+  if (recentCommands.length !== before) {
+    console.log(`🧹 Pulizia comandi vecchi: rimossi ${before - recentCommands.length}`);
   }
   
-  // Pulisci slave disconnessi
+  // 3. Pulizia bot inattivi
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-  const slavesBefore = connectedSlaves.size;
-  connectedSlaves.forEach((data, slaveId) => {
+  const botsBefore = connectedBots.size;
+  connectedBots.forEach((data, botId) => {
     if (data.lastAccess < fiveMinutesAgo) {
-      connectedSlaves.delete(slaveId);
+      connectedBots.delete(botId);
     }
   });
   
-  if (connectedSlaves.size !== slavesBefore) {
-    console.log(`🧹 Pulizia slave disconnessi: rimossi ${slavesBefore - connectedSlaves.size} slave inattivi`);
+  if (connectedBots.size !== botsBefore) {
+    console.log(`🧹 Pulizia bot disconnessi: rimossi ${botsBefore - connectedBots.size}`);
   }
 }, 6 * 60 * 60 * 1000);
