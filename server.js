@@ -620,39 +620,27 @@ app.listen(PORT, () => {
 });
 
 //+------------------------------------------------------------------+
-//| Pulizia automatica periodica                                     |
+//| Pulizia automatica eventi vecchi                                 |
 //+------------------------------------------------------------------+
 setInterval(() => {
-  // 1. Pulizia remoteTrades (ogni 10 secondi)
-  const now = new Date();
-  const beforeTrades = remoteTrades.length;
-  remoteTrades = remoteTrades.filter(t => !t.executed && t.expires > now);
-  
-  if (remoteTrades.length !== beforeTrades) {
-    console.log(`🧹 Cleanup remoteTrades: ${beforeTrades} -> ${remoteTrades.length}`);
-  }
-}, 10000);
-
-setInterval(() => {
-  // 2. Pulizia recentCommands (ogni 6 ore)
   const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
-  const before = recentCommands.length;
-  recentCommands = recentCommands.filter(cmd => cmd.timestamp > cutoff);
+  const before = recentEvents.length;
+  recentEvents = recentEvents.filter(event => event.timestamp > cutoff);
   
-  if (recentCommands.length !== before) {
-    console.log(`🧹 Pulizia comandi vecchi: rimossi ${before - recentCommands.length}`);
+  if (recentEvents.length !== before) {
+    console.log(`🧹 Pulizia automatica: rimossi ${before - recentEvents.length} eventi vecchi`);
   }
   
-  // 3. Pulizia bot inattivi
+  // Pulisci slave disconnessi
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-  const botsBefore = connectedBots.size;
-  connectedBots.forEach((data, botId) => {
+  const slavesBefore = connectedSlaves.size;
+  connectedSlaves.forEach((data, slaveId) => {
     if (data.lastAccess < fiveMinutesAgo) {
-      connectedBots.delete(botId);
+      connectedSlaves.delete(slaveId);
     }
   });
   
-  if (connectedBots.size !== botsBefore) {
-    console.log(`🧹 Pulizia bot disconnessi: rimossi ${botsBefore - connectedBots.size}`);
+  if (connectedSlaves.size !== slavesBefore) {
+    console.log(`🧹 Pulizia slave disconnessi: rimossi ${slavesBefore - connectedSlaves.size} slave inattivi`);
   }
 }, 6 * 60 * 60 * 1000);
