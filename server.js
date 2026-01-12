@@ -41,6 +41,7 @@ function authenticateSlave(req, res, next) {
   const { slavekey } = req.query;
   
   if (!slavekey || slavekey !== SLAVE_KEY) {
+    console.warn(`⚠️ WARNING GRAVE: Tentativo autenticazione Slave fallito da IP ${req.ip}`);
     return res.status(401).json({ 
       error: 'Unauthorized', 
       message: 'Valid slave key required' 
@@ -140,6 +141,7 @@ app.post('/api/signals', (req, res) => {
   } = req.body;
 
   if (masterkey !== MASTER_KEY) {
+    console.warn(`⚠️ WARNING GRAVE: Tentativo autenticazione Master fallito (endpoint /api/signals) da IP ${req.ip}`);
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -155,6 +157,7 @@ app.post('/api/signals', (req, res) => {
 
   if (action === 'pending') {
     if (filledTrades.has(ticketNum)) {
+      console.warn(`⚠️ WARNING GRAVE: PENDENTE #${ticket} già fillato - possibile problema di sincronizzazione`);
       res.json({ status: 'already_filled' });
       return;
     }
@@ -183,6 +186,7 @@ app.post('/api/signals', (req, res) => {
 
   } else if (action === 'modify') {
     if (filledTrades.has(ticketNum)) {
+      console.warn(`⚠️ WARNING GRAVE: MODIFY IGNORATO #${ticket} già fillato - possibile problema di sincronizzazione`);
       res.json({ status: 'already_filled' });
       return;
     }
@@ -368,6 +372,7 @@ app.post('/api/slave-filled', authenticateSlave, (req, res) => {
     filledTrades.delete(ticketNum);
     res.json({ status: 'confirmed' });
   } else {
+    console.warn(`⚠️ WARNING GRAVE: Slave conferma ticket #${ticket} non fillato - possibile problema di sincronizzazione Master/Slave`);
     res.json({ status: 'not_found' });
   }
 });
@@ -432,6 +437,7 @@ app.get('/api/stats', (req, res) => {
 //+------------------------------------------------------------------+
 app.post('/api/reset', (req, res) => {
   if (req.body.masterkey !== MASTER_KEY) {
+    console.warn(`⚠️ WARNING GRAVE: Tentativo autenticazione Master fallito (endpoint /api/reset) da IP ${req.ip}`);
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -503,6 +509,7 @@ app.post('/api/verify-slave', (req, res) => {
 //+------------------------------------------------------------------+
 app.post('/api/reset-flag', (req, res) => {
   if (req.body.masterkey !== MASTER_KEY) {
+    console.warn(`⚠️ WARNING GRAVE: Tentativo autenticazione Master fallito (endpoint /api/reset-flag) da IP ${req.ip}`);
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -525,6 +532,7 @@ app.post('/api/broker-time', (req, res) => {
   const { masterkey, brokerTime, slaveAutoCloseFilledTrades } = req.body;
 
   if (masterkey !== MASTER_KEY) {
+    console.warn(`⚠️ WARNING GRAVE: Tentativo autenticazione Master fallito (endpoint /api/broker-time) da IP ${req.ip}`);
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
