@@ -66,7 +66,6 @@ function updateMasterAccountInfo(accountData) {
       ...accountData,
       lastUpdated: new Date()
     };
-    console.log(`💰 Account Master aggiornato: Balance: ${accountData.balance}, Equity: ${accountData.equity}`);
   }
 }
 
@@ -85,16 +84,10 @@ function getTradeCount() {
 //| Gestisce flag reset                                              |
 //+------------------------------------------------------------------+
 function setResetFlag(value, reason = '') {
-  const wasReset = isReset;
   isReset = value;
   
   if (value) {
     resetTimestamp = new Date();
-    console.log(`🚨 RESET FLAG ATTIVATO: ${reason}`);
-  } else {
-    if (wasReset) {
-      console.log(`✅ RESET FLAG DISATTIVATO: ${reason}`);
-    }
   }
 }
 
@@ -103,8 +96,6 @@ function setResetFlag(value, reason = '') {
 //+------------------------------------------------------------------+
 app.get('/api/tradecount', authenticateSlave, (req, res) => {
   const count = getTradeCount();
-  
-  console.log(`📊 CONTATORE: Pendenti=${count.pendingOrders}, Fillati=${count.filledTrades}, Reset=${isReset}`);
   
   res.json({
     pendingOrders: count.pendingOrders,
@@ -164,7 +155,6 @@ app.post('/api/signals', (req, res) => {
 
   if (action === 'pending') {
     if (filledTrades.has(ticketNum)) {
-      console.log(`⚠️ PENDENTE GIÀ FILLATO: #${ticket}`);
       res.json({ status: 'already_filled' });
       return;
     }
@@ -191,12 +181,8 @@ app.post('/api/signals', (req, res) => {
     pendingOrders.set(ticketNum, pendingOrder);
     if (account) updateMasterAccountInfo(account);
 
-    const count = getTradeCount();
-    console.log(`🟡 PENDENTE #${ticket} ${symbol} @ ${price} (Tot: ${count.totalTrades}, AutoClose: ${slaveConfig.autoCloseFilledTrades})`);
-
   } else if (action === 'modify') {
     if (filledTrades.has(ticketNum)) {
-      console.log(`⚠️ MODIFY IGNORATO: #${ticket} già fillato`);
       res.json({ status: 'already_filled' });
       return;
     }
@@ -237,7 +223,6 @@ app.post('/api/signals', (req, res) => {
       });
       
       if (account) updateMasterAccountInfo(account);
-      console.log(`🔄 MODIFICATO #${ticket} @ ${price}`);
     }
 
   } else if (action === 'silentBarsUpdate') {
@@ -253,7 +238,6 @@ app.post('/api/signals', (req, res) => {
       };
       
       pendingOrders.set(ticketNum, updated);
-      console.log(`📊 BARRE AGGIORNATE #${ticket} -> ${barsFromPlacement}`);
     }
 
     if (account) updateMasterAccountInfo(account);
@@ -274,9 +258,6 @@ app.post('/api/signals', (req, res) => {
       filledTrades.set(ticketNum, filledTrade);
       
       recentEvents = recentEvents.filter(event => event.ticket !== ticketNum);
-      
-      const count = getTradeCount();
-      console.log(`🔵 FILLATO #${ticket} ${originalPending.symbol} (Tot: ${count.totalTrades})`);
     }
 
     if (account) updateMasterAccountInfo(account);
@@ -301,7 +282,6 @@ app.post('/api/signals', (req, res) => {
     
     if (filledTrades.has(ticketNum)) {
       filledTrades.delete(ticketNum);
-      console.log(`🔴 TRADE CHIUSO #${ticket} ${symbol} P:${profit} (AutoClose: ${slaveConfig.autoCloseFilledTrades})`);
     }
     
     recentEvents.push(closedTrade);
@@ -324,7 +304,6 @@ app.post('/api/signals', (req, res) => {
       });
       
       if (account) updateMasterAccountInfo(account);
-      console.log(`❌ CANCELLATO #${ticket}`);
     }
   }
 
@@ -374,8 +353,6 @@ app.get('/api/getsignals', authenticateSlave, (req, res) => {
   } else {
     response.recentEvents = recentEvents;
   }
-  
-  console.log(`📤 Segnali a SLAVE: pending=${response.pendingOrders.length}, filled=${response.filledTrades.length}, events=${response.recentEvents.length}, autoClose=${response.slaveConfig.autoCloseFilledTrades}`);
 
   res.json(response);
 });
@@ -389,11 +366,8 @@ app.post('/api/slave-filled', authenticateSlave, (req, res) => {
   
   if (filledTrades.has(ticketNum)) {
     filledTrades.delete(ticketNum);
-    const count = getTradeCount();
-    console.log(`✅ SLAVE CONFERMA ESECUZIONE: #${ticket} (Tot: ${count.totalTrades})`);
     res.json({ status: 'confirmed' });
   } else {
-    console.warn(`⚠️ Slave conferma per ticket non fillato: #${ticket}`);
     res.json({ status: 'not_found' });
   }
 });
@@ -469,7 +443,6 @@ app.post('/api/reset', (req, res) => {
   masterAccountInfo = {};
   connectedSlaves.clear();
 
-  console.log('🧹 RESET COMPLETO');
   res.json({ 
     status: 'success', 
     message: 'Complete reset performed',
@@ -563,10 +536,7 @@ app.post('/api/broker-time', (req, res) => {
     if (typeof slaveAutoCloseFilledTrades === 'boolean') {
       slaveConfig.autoCloseFilledTrades = slaveAutoCloseFilledTrades;
       slaveConfig.lastUpdate = new Date();
-      console.log(`⚙️ Config Slave aggiornata: AutoClose=${slaveAutoCloseFilledTrades}`);
     }
-    
-    console.log(`🕐 Orario Broker Master: ${brokerTime}`);
     
     res.json({ 
       status: 'success',
@@ -595,52 +565,48 @@ app.get('/api/broker-time', (req, res) => {
 });
 
 //+------------------------------------------------------------------+
+//| Error Handler Globale                                            |
+//+------------------------------------------------------------------+
+app.use((err, req, res, next) => {
+  console.error('❌ ERRORE GRAVE:', err.message);
+  console.error('Stack:', err.stack);
+  res.status(500).json({ 
+    error: 'Internal Server Error',
+    message: err.message 
+  });
+});
+
+//+------------------------------------------------------------------+
+//| Handler per errori non gestiti                                  |
+//+------------------------------------------------------------------+
+process.on('uncaughtException', (err) => {
+  console.error('❌ ERRORE CRITICO NON GESTITO:', err.message);
+  console.error('Stack:', err.stack);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ PROMISE REJECTION NON GESTITA:', reason);
+  console.error('Promise:', promise);
+});
+
+//+------------------------------------------------------------------+
 //| Avvia server                                                     |
 //+------------------------------------------------------------------+
-app.listen(PORT, () => {
-  console.log(`🚀 EA Advanced Pending API v8.0 (FIXED) avviata su port ${PORT}`);
-  console.log(`📋 Endpoints disponibili:`);
-  console.log(`   GET  /api/health           - Health check`);
-  console.log(`   POST /api/signals          - Ricevi segnali dal Master`);
-  console.log(`   GET  /api/getsignals       - Ottieni segnali per Slave (AUTH)`);
-  console.log(`   GET  /api/tradecount       - Contatore trades (AUTH)`);
-  console.log(`   POST /api/slave-filled     - Slave notifica esecuzione (AUTH)`);
-  console.log(`   POST /api/broker-time      - Aggiorna orario broker + Config Slave`);
-  console.log(`   GET  /api/broker-time      - Leggi orario broker`);
-  console.log(`   GET  /api/stats            - Statistiche dettagliate`);
-  console.log(`   POST /api/reset            - Reset completo (ATTIVA FLAG)`);
-  console.log(`   POST /api/reset-flag       - Reset manuale del flag`);
-  console.log(`   GET  /api/debug            - Debug stato interno`);
-  console.log(`   POST /api/verify-slave     - Verifica chiave slave`);
-  console.log(`🔐 SICUREZZA ATTIVA:`);
-  console.log(`   Master Key: ${MASTER_KEY}`);
-  console.log(`   Slave Key:  ${SLAVE_KEY}`);
-  console.log(`🔧 FIX APPLICATO: slaveConfig separato da masterAccountInfo`);
-  console.log(`💡 LOGICA: Pendenti + Fillati + Reset Flag + Slave Config INDIPENDENTE`);
-});
+app.listen(PORT);
 
 //+------------------------------------------------------------------+
 //| Pulizia automatica eventi vecchi                                 |
 //+------------------------------------------------------------------+
 setInterval(() => {
   const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
-  const before = recentEvents.length;
   recentEvents = recentEvents.filter(event => event.timestamp > cutoff);
-  
-  if (recentEvents.length !== before) {
-    console.log(`🧹 Pulizia automatica: rimossi ${before - recentEvents.length} eventi vecchi`);
-  }
   
   // Pulisci slave disconnessi
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-  const slavesBefore = connectedSlaves.size;
   connectedSlaves.forEach((data, slaveId) => {
     if (data.lastAccess < fiveMinutesAgo) {
       connectedSlaves.delete(slaveId);
     }
   });
-  
-  if (connectedSlaves.size !== slavesBefore) {
-    console.log(`🧹 Pulizia slave disconnessi: rimossi ${slavesBefore - connectedSlaves.size} slave inattivi`);
-  }
 }, 6 * 60 * 60 * 1000);
