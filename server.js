@@ -601,7 +601,28 @@ process.on('unhandledRejection', (reason, promise) => {
 //+------------------------------------------------------------------+
 //| Avvia server                                                     |
 //+------------------------------------------------------------------+
-app.listen(PORT);
+const server = app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ SERVER AVVIATO SULLA PORTA ${PORT}`);
+  console.log(`✅ Server time: ${new Date().toISOString()}`);
+  console.log(`✅ Environment: ${process.env.NODE_ENV || 'development'}`);
+});
+
+// Graceful shutdown per Railway
+process.on('SIGTERM', () => {
+  console.log('⚠️ SIGTERM ricevuto, chiusura graceful...');
+  server.close(() => {
+    console.log('✅ Server chiuso correttamente');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('⚠️ SIGINT ricevuto, chiusura graceful...');
+  server.close(() => {
+    console.log('✅ Server chiuso correttamente');
+    process.exit(0);
+  });
+});
 
 //+------------------------------------------------------------------+
 //| Pulizia automatica eventi vecchi                                 |
