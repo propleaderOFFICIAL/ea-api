@@ -1,0 +1,38 @@
+# Template Variabili Ambiente per Vercel
+# Copia questi valori nella dashboard Vercel → Settings → Environment Variables
+
+# ═══════════════════════════════════════════════════════════
+#  UPSTASH REDIS (Stesso per tutti i deployment)
+# ═══════════════════════════════════════════════════════════
+
+UPSTASH_REDIS_REST_URL=https://eager-pigeon-43987.upstash.io
+UPSTASH_REDIS_REST_TOKEN=AavTAAIncDE1YjgzNDBkZWNhMTk0ODI3OTI0ZGMzNDZiMjM4NDczYnAxNDM5ODc
+
+# ═══════════════════════════════════════════════════════════
+#  PREFIX (Diverso per ogni EA)
+# ═══════════════════════════════════════════════════════════
+
+# Per Elite-200 deployment:
+PREFIX=elite200_
+
+# Per Elite-30 deployment:
+# PREFIX=elite30_
+
+# Per Elite-100 deployment:
+# PREFIX=elite100_
+
+# Per Elite-AI deployment:
+# PREFIX=eliteai_
+
+# ═══════════════════════════════════════════════════════════
+#  SECURITY KEYS (Stesso per tutti)
+# ═══════════════════════════════════════════════════════════
+
+MASTER_KEY=master_secret_key_2024
+SLAVE_KEY=slave_access_key_2025_08
+
+# ═══════════════════════════════════════════════════════════
+#  ENVIRONMENT
+# ═══════════════════════════════════════════════════════════
+
+NODE_ENV=production
